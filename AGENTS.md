@@ -8,32 +8,70 @@ SNIP-36 virtual block proving tooling for Starknet. Two-phase pipeline:
 
 ## Architecture
 
-- `scripts/` — Bash scripts orchestrating the pipeline (setup, prove, extract, run)
-- `extractor/` — Rust crate that extracts the compiled virtual OS program from `apollo_starknet_os_program`
-- `tests/` — E2E test, contract artifacts, signing/submission tooling (Python + Bash)
+The project is a Rust workspace with three crates:
+
+- `crates/snip36-core/` — Shared library: typed config, Starknet RPC client, SNIP-36 signing, proof encoding
+- `crates/snip36-cli/` — Unified CLI (`snip36`) with subcommands: prove, submit, deploy, fund, health, setup, extract, e2e
+- `crates/snip36-server/` — Axum web backend (replaces FastAPI) for the proving playground
+- `extractor/` — Rust crate that extracts the compiled virtual OS program (excluded from default workspace, requires `deps/sequencer/`)
+- `web/frontend/` — React + TypeScript playground UI (unchanged)
+- `tests/contracts/` — Cairo counter contract for E2E tests
+- `scripts/` — Shell scripts for external binary orchestration (setup, prove, run-virtual-os)
 - `sample-input/` — Template inputs for the prover and bootloader
 - `deps/` — (generated, gitignored) Cloned repos: `proving-utils`, `sequencer`
 
 ## Key Conventions
 
-- Shell scripts use `set -euo pipefail` and are in `scripts/`
-- Rust code targets `nightly-2025-07-14` (pinned by stwo 2.1.0)
-- Python scripts (`tests/sign-and-submit.py`, `tests/convert-proof.py`) use starknet-py
-- All proof output is in cairo-serde JSON format (hex field element array)
+- All Rust code targets stable toolchain (workspace crates)
+- External dependencies (`stwo`, `sequencer`) require `nightly-2025-07-14`
+- Config loaded from `.env` via `snip36_core::Config`
+- Structured logging via `tracing` crate
+- Error handling via `color-eyre` (CLI) and typed errors (`thiserror`) in core
+- All proof output is base64-encoded (runner outputs directly as base64)
 - Proofs and build artifacts go in `output/` (gitignored)
 
 ## Building
 
 ```bash
-./scripts/setup.sh           # Clone deps, build stwo prover
-cargo build -p virtual-os-extractor  # Build extractor
+cargo build --workspace              # Build all crates
+cargo build --release -p snip36-cli  # Build the CLI
+cargo build --release -p snip36-server  # Build the web backend
+
+# External dependencies (stwo prover, starknet_os_runner):
+snip36 setup                         # Or ./scripts/setup.sh
+```
+
+## CLI Usage
+
+```bash
+snip36 prove virtual-os --block-number N --tx-hash 0x... --rpc-url URL
+snip36 prove program --program file.json --output proof.out
+snip36 submit --proof proof.b64 --proof-facts facts.json --calldata 0x1,0x2 --contract-address 0x...
+snip36 deploy counter
+snip36 deploy account --public-key 0x...
+snip36 fund --to 0x... --amount 10000000000000000000
+snip36 health
+snip36 health --quick
+snip36 setup
+snip36 e2e
+```
+
+## Web Playground
+
+```bash
+# Backend (Rust):
+cargo run --release -p snip36-server
+
+# Frontend (unchanged):
+cd web/frontend && npm install && npm run dev
 ```
 
 ## Testing
 
 ```bash
-./scripts/test-pipeline.sh   # Sanity check: prove + verify a test program
-./tests/e2e-test.sh          # Full E2E: execute → prove → sign → submit
+cargo test --workspace           # Unit tests
+snip36 health                    # Integration health check (needs RPC)
+snip36 e2e                       # Full E2E: execute → prove → sign → submit
 ```
 
 ## Environment
@@ -45,11 +83,12 @@ cargo build -p virtual-os-extractor  # Build extractor
 ## Working with Proofs
 
 - PIE files: `.pie.zip` — Cairo Program Independent Execution artifacts
-- Proof files: `.proof` — stwo proofs in cairo-serde format
-- The `proof_facts` field in INVOKE_TXN_V3 must be included in Poseidon tx hash computation (non-standard — see `tests/sign-and-submit.py`)
+- Proof files: `.proof` — stwo proofs as base64 strings
+- The `proof_facts` field in INVOKE_TXN_V3 must be included in Poseidon tx hash computation (non-standard — see `crates/snip36-core/src/signing.rs`)
 
 ## Common Pitfalls
 
 - Runner must use `--prefetch-state false` (prefetch has a bug with missing storage keys)
-- Tx signing must include `proof_facts` in the hash chain — standard starknet-py does NOT do this
+- Tx signing must include `proof_facts` in the hash chain — standard Starknet SDKs do NOT do this
 - L2 gas for proof verification is ~75M — set max to ≥117M
+- The `extractor` crate requires `deps/sequencer/` to exist (run `snip36 setup` first)

@@ -16,7 +16,7 @@ target/
 # Environment secrets
 .env
 
-# Python virtual environments
+# Python virtual environments (legacy, used during setup for cairo-compile)
 sequencer_venv/
 venv/
 __pycache__/

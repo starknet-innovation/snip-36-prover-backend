@@ -22,12 +22,8 @@ Each step includes an explainer toggle with educational context.
 # 1. Set up the master account (one-time)
 ./web/setup-master.sh
 
-# 2. Start the backend
-cd web/backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python app.py
+# 2. Start the backend (Rust)
+cargo run --release -p snip36-server
 
 # 3. Start the frontend (in another terminal)
 cd web/frontend
@@ -40,7 +36,7 @@ Open http://localhost:3000
 ## Architecture
 
 - **Frontend** (React + starknet.js v9): Key generation, tx hash computation, and signing happen entirely in-browser. The private key never leaves the client.
-- **Backend** (FastAPI): Wraps existing shell scripts (`run-virtual-os.sh`, `sign-and-submit.py`, `sncast`) behind a REST + SSE API. Holds a pre-funded master account for funding dev accounts.
+- **Backend** (Axum / Rust): REST + SSE API backed by `snip36-core` for signing and the shell scripts for prover orchestration. Holds a pre-funded master account for funding dev accounts.
 - **Proof streaming**: SSE (Server-Sent Events) streams prover logs in real-time.
 
 ### Transaction Hashing
@@ -52,12 +48,12 @@ Two different hash computations are used:
 | Step 5 (normal invoke via RPC) | Standard SNIP-8 | L1_GAS + L2_GAS |
 | Step 7 (proof tx via gateway) | SNIP-36 extended | L1_GAS + L2_GAS + L1_DATA + proof_facts |
 
-Step 5 uses starknet.js's built-in `calculateInvokeTransactionHash`. Step 7 uses the custom computation in `sign-and-submit.py`.
+Step 5 uses starknet.js's built-in `calculateInvokeTransactionHash`. Step 7 uses `snip36-core::signing` in the Rust backend.
 
 ## Prerequisites
 
-- Python 3.10+
+- Rust stable toolchain
 - Node.js 18+
 - `sncast` (from starknet-foundry)
-- The prover tooling set up via `./scripts/setup.sh`
+- The prover tooling set up via `snip36 setup`
 - A funded account on Starknet Integration Sepolia (configure in `.env`)
