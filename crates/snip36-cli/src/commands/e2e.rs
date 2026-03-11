@@ -10,7 +10,7 @@ use tracing::{error, info};
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{felt_from_hex, sign_and_build_payload};
-use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{ResourceBounds, SubmitParams, GET_COUNTER_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
 use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};
@@ -496,6 +496,51 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     }
 
     // ==========================================
+    // STEP 9: Verify counter incremented
+    // ==========================================
+    step(9, "Verify counter incremented on-chain");
+
+    if accepted {
+        // Read counter value before the proven tx lands
+        let counter_before = read_counter(&rpc, &contract_address).await;
+        info!("  Counter before: {counter_before:?}");
+
+        // Wait for the proven transaction to be included
+        info!("  Waiting for proven tx {:#x} to be included...", tx_hash);
+        let tx_hash_hex = format!("{:#x}", tx_hash);
+        match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
+            Ok(receipt) => {
+                let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
+                info!("  Proven tx included in block {bn}");
+            }
+            Err(e) => {
+                fail(&format!("Proven tx not confirmed: {e}"));
+            }
+        }
+
+        // Read counter value after
+        let counter_after = read_counter(&rpc, &contract_address).await;
+        info!("  Counter after:  {counter_after:?}");
+
+        match (counter_before, counter_after) {
+            (Some(before), Some(after)) if after == before + 1 => {
+                pass(&format!("Counter incremented: {before} -> {after}"));
+            }
+            (Some(before), Some(after)) => {
+                fail(&format!("Counter did not increment as expected: {before} -> {after}"));
+            }
+            (None, Some(after)) if after == 1 => {
+                pass(&format!("Counter value is {after} (could not read before)"));
+            }
+            _ => {
+                fail("Could not read counter value");
+            }
+        }
+    } else {
+        info!("  Skipping counter verification (proof not accepted)");
+    }
+
+    // ==========================================
     // Summary
     // ==========================================
     finish_last_step();
@@ -555,4 +600,13 @@ async fn check_prereqs(config: &Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn read_counter(rpc: &StarknetRpc, contract_address: &str) -> Option<u64> {
+    let result = rpc
+        .starknet_call(contract_address, GET_COUNTER_SELECTOR, &[])
+        .await
+        .ok()?;
+    let hex = result.first()?;
+    u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
 }
