@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::signing::{felt_from_hex, sign_and_build_payload};
+use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
 use snip36_core::types::{ResourceBounds, SubmitParams, GET_COUNTER_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -247,11 +247,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // ==========================================
     step(4, "Wait for deploy tx inclusion");
 
-    if let Some(tx) = &deploy_tx_hash {
+    let deploy_block = if let Some(tx) = &deploy_tx_hash {
         match rpc.wait_for_tx(tx, 120, 3).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 pass(&format!("Deploy confirmed in block {bn}"));
+                bn
             }
             Err(e) => {
                 fail(&format!("Could not confirm deploy tx: {e}"));
@@ -287,7 +288,37 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let nonce = rpc.get_nonce(&config.account_address).await?;
     let resource_bounds = ResourceBounds::default();
 
-    // Build the unsigned invoke v3 transaction object (same shape the RPC returns)
+    // Parse felts for signing
+    let sender_felt = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
+    let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
+    let chain_id = config.chain_id_felt();
+    let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
+
+    let calldata_felts: Vec<starknet_types_core::felt::Felt> = calldata
+        .iter()
+        .map(|h| felt_from_hex(h).map_err(|e| eyre::eyre!(e)))
+        .collect::<Result<_>>()?;
+
+    // Compute the standard invoke v3 tx hash (WITHOUT proof_facts — this is what
+    // the account contract's __validate__ will check)
+    let standard_tx_hash = compute_invoke_v3_tx_hash(
+        sender_felt,
+        &calldata_felts,
+        chain_id,
+        nonce_felt,
+        starknet_types_core::felt::Felt::ZERO, // tip
+        &resource_bounds,
+        &[],  // paymaster_data
+        &[],  // account_deployment_data
+        0,    // nonce_da_mode
+        0,    // fee_da_mode
+        &[],  // no proof_facts for the virtual OS validation
+    );
+
+    let sig = sign(private_key_felt, standard_tx_hash)
+        .map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+
+    // Build the signed invoke v3 transaction object
     let tx_json = serde_json::json!({
         "type": "INVOKE",
         "version": "0x3",
@@ -300,19 +331,22 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         "account_deployment_data": [],
         "nonce_data_availability_mode": "L1",
         "fee_data_availability_mode": "L1",
-        "signature": [],
+        "signature": [format!("{:#x}", sig.r), format!("{:#x}", sig.s)],
     });
 
     info!("  Sender:   {}", config.account_address);
     info!("  Nonce:    {nonce}");
     info!("  Contract: {contract_address}");
     info!("  Calldata: increment(1)");
+    info!("  Tx hash:  {:#x}", standard_tx_hash);
     info!("  NOTE: Transaction is NOT submitted on-chain");
-    pass("Invoke transaction constructed");
+    pass("Invoke transaction constructed and signed");
 
-    // Get current block number as reference for the virtual OS
-    let block_number = rpc.block_number().await?;
-    info!("  Reference block: {block_number}");
+    // Use the deploy block as the reference block for proving.
+    // The contract must exist at the reference block, so we can't go earlier than deploy.
+    // The gateway retry loop handles the case where the gateway hasn't caught up yet.
+    let block_number = deploy_block;
+    info!("  Using deploy block {block_number} as proving reference (contract exists at this state)");
 
     // Write the constructed tx to disk for the prove command
     let tx_json_path = args.output_dir.join("e2e_tx.json");
@@ -474,8 +508,8 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                     pass("Proof accepted by gateway (signed submission)");
                     accepted = true;
                     break;
-                } else if msg.contains("too recent") && attempt < max_attempts {
-                    info!("  Attempt {attempt}/{max_attempts}: gateway says block too recent, waiting 10s...");
+                } else if (msg.contains("too recent") || msg.contains("stored block hash: 0")) && attempt < max_attempts {
+                    info!("  Attempt {attempt}/{max_attempts}: gateway not ready for this block, waiting 10s...");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     continue;
                 } else {
