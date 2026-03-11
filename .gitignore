@@ -16,8 +16,16 @@ target/
 # Environment secrets
 .env
 
-# Python virtual environment
+# Python virtual environments
 sequencer_venv/
+venv/
+__pycache__/
+
+# Node
+node_modules/
+
+# Frontend build output
+dist/
 
 # IDE
 .vscode/
