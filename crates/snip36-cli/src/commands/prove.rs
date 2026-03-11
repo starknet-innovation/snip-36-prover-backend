@@ -23,9 +23,13 @@ pub enum ProveMode {
         #[arg(long)]
         block_number: u64,
 
-        /// Transaction hash to prove
-        #[arg(long)]
-        tx_hash: String,
+        /// Transaction hash to fetch from RPC and prove
+        #[arg(long, required_unless_present = "tx_json")]
+        tx_hash: Option<String>,
+
+        /// Path to a JSON file containing the transaction object (alternative to --tx-hash)
+        #[arg(long, conflicts_with = "tx_hash")]
+        tx_json: Option<PathBuf>,
 
         /// Starknet RPC endpoint URL
         #[arg(long)]
@@ -100,6 +104,7 @@ pub async fn run(args: ProveArgs, env_file: Option<&std::path::Path>) -> Result<
         ProveMode::VirtualOs {
             block_number,
             tx_hash,
+            tx_json,
             rpc_url,
             output,
             prover_url,
@@ -108,7 +113,8 @@ pub async fn run(args: ProveArgs, env_file: Option<&std::path::Path>) -> Result<
         } => {
             run_virtual_os(
                 block_number,
-                &tx_hash,
+                tx_hash.as_deref(),
+                tx_json.as_deref(),
                 &rpc_url,
                 &output,
                 prover_url.as_deref(),
@@ -148,7 +154,8 @@ pub async fn run(args: ProveArgs, env_file: Option<&std::path::Path>) -> Result<
 #[allow(clippy::too_many_arguments)]
 async fn run_virtual_os(
     block_number: u64,
-    tx_hash: &str,
+    tx_hash: Option<&str>,
+    tx_json_path: Option<&std::path::Path>,
     rpc_url: &str,
     output: &std::path::Path,
     prover_url: Option<&str>,
@@ -158,32 +165,43 @@ async fn run_virtual_os(
 ) -> Result<()> {
     info!("=== Running Virtual OS ===");
     info!("  Block:  {block_number}");
-    info!("  Tx:     {tx_hash}");
     info!("  RPC:    {rpc_url}");
     info!("  Output: {}", output.display());
 
-    // Fetch the transaction from RPC
-    info!("Fetching transaction {tx_hash} from RPC...");
     let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
-        .post(rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_getTransactionByHash",
-            "params": {"transaction_hash": tx_hash},
-            "id": 1
-        }))
-        .send()
-        .await
-        .wrap_err("failed to fetch transaction")?
-        .json()
-        .await?;
 
-    let tx_data = resp
-        .get("result")
-        .filter(|v| !v.is_null())
-        .ok_or_else(|| eyre::eyre!("could not fetch transaction {tx_hash}: {resp}"))?;
-    info!("  Transaction fetched successfully");
+    // Load transaction data: either from a JSON file or by fetching from RPC
+    let tx_data: serde_json::Value = if let Some(path) = tx_json_path {
+        info!("  Loading transaction from {}", path.display());
+        let contents = tokio::fs::read_to_string(path)
+            .await
+            .wrap_err_with(|| format!("failed to read tx JSON from {}", path.display()))?;
+        serde_json::from_str(&contents)
+            .wrap_err("failed to parse transaction JSON")?
+    } else if let Some(hash) = tx_hash {
+        info!("  Fetching transaction {hash} from RPC...");
+        let resp: serde_json::Value = client
+            .post(rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "starknet_getTransactionByHash",
+                "params": {"transaction_hash": hash},
+                "id": 1
+            }))
+            .send()
+            .await
+            .wrap_err("failed to fetch transaction")?
+            .json()
+            .await?;
+
+        resp.get("result")
+            .filter(|v| !v.is_null())
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("could not fetch transaction {hash}: {resp}"))?
+    } else {
+        bail!("either --tx-hash or --tx-json must be provided");
+    };
+    info!("  Transaction loaded successfully");
 
     let prove_endpoint;
     let mut _runner_child: Option<tokio::process::Child> = None;
