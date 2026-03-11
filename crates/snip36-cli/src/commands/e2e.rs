@@ -80,6 +80,18 @@ pub struct E2eArgs {
     /// Output directory for E2E artifacts
     #[arg(long, default_value = "output/e2e")]
     output_dir: PathBuf,
+
+    /// Number of SNOS virtual blocks to prove and submit
+    #[arg(long, default_value = "1")]
+    snos_blocks: u32,
+
+    /// Amount to pass to each increment() call
+    #[arg(long, default_value = "1")]
+    counter_increments: u64,
+
+    /// Number of increment() calls per SNOS block
+    #[arg(long, default_value = "1")]
+    increments_per_snos: u32,
 }
 
 pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -95,10 +107,15 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let rpc = StarknetRpc::new(&config.rpc_url);
     let account_name = "e2e-test-account-2";
 
+    let increment_per_block = args.counter_increments * args.increments_per_snos as u64;
+    let total_expected = increment_per_block * args.snos_blocks as u64;
+
     info!("=== SNIP-36 End-to-End Test ===");
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
+    info!("  Blocks:  {} × {} calls × increment({}) = +{} total",
+        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected);
     info!("");
 
     // Check prerequisites
@@ -265,313 +282,284 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     };
 
     // ==========================================
-    // STEP 5: Construct invoke transaction
+    // Proving loop: construct, prove, submit, verify for each block
     // ==========================================
-    //
-    // This is the SNIP-36 flow: we construct the transaction but do NOT submit
-    // it to the sequencer. Instead it goes directly to the virtual OS runner
-    // for off-chain execution and proving.
-    step(5, "Construct invoke transaction (off-chain)");
 
     let increment_selector =
         "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
 
-    // Multicall calldata: [num_calls, to, selector, calldata_len, ...calldata]
-    let calldata = vec![
-        "0x1".to_string(),
-        contract_address.clone(),
-        increment_selector.to_string(),
-        "0x1".to_string(),
-        "0x1".to_string(),
-    ];
-
-    let nonce = rpc.get_nonce(&config.account_address).await?;
-    let resource_bounds = ResourceBounds::default();
-
-    // Parse felts for signing
-    let sender_felt = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
-    let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
-    let chain_id = config.chain_id_felt();
-    let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
+    // Build multicall calldata (reused for every block)
+    let calldata: Vec<String> = {
+        let mut cd = vec![format!("{:#x}", args.increments_per_snos)];
+        for _ in 0..args.increments_per_snos {
+            cd.push(contract_address.clone());
+            cd.push(increment_selector.to_string());
+            cd.push("0x1".to_string());
+            cd.push(format!("{:#x}", args.counter_increments));
+        }
+        cd
+    };
 
     let calldata_felts: Vec<starknet_types_core::felt::Felt> = calldata
         .iter()
         .map(|h| felt_from_hex(h).map_err(|e| eyre::eyre!(e)))
         .collect::<Result<_>>()?;
 
-    // Compute the standard invoke v3 tx hash (WITHOUT proof_facts — this is what
-    // the account contract's __validate__ will check)
-    let standard_tx_hash = compute_invoke_v3_tx_hash(
-        sender_felt,
-        &calldata_felts,
-        chain_id,
-        nonce_felt,
-        starknet_types_core::felt::Felt::ZERO, // tip
-        &resource_bounds,
-        &[],  // paymaster_data
-        &[],  // account_deployment_data
-        0,    // nonce_da_mode
-        0,    // fee_da_mode
-        &[],  // no proof_facts for the virtual OS validation
-    );
-
-    let sig = sign(private_key_felt, standard_tx_hash)
-        .map_err(|e| eyre::eyre!("signing failed: {e}"))?;
-
-    // Build the signed invoke v3 transaction object
-    let tx_json = serde_json::json!({
-        "type": "INVOKE",
-        "version": "0x3",
-        "sender_address": &config.account_address,
-        "calldata": calldata,
-        "nonce": format!("{:#x}", nonce),
-        "resource_bounds": resource_bounds.to_rpc_json(),
-        "tip": "0x0",
-        "paymaster_data": [],
-        "account_deployment_data": [],
-        "nonce_data_availability_mode": "L1",
-        "fee_data_availability_mode": "L1",
-        "signature": [format!("{:#x}", sig.r), format!("{:#x}", sig.s)],
-    });
-
-    info!("  Sender:   {}", config.account_address);
-    info!("  Nonce:    {nonce}");
-    info!("  Contract: {contract_address}");
-    info!("  Calldata: increment(1)");
-    info!("  Tx hash:  {:#x}", standard_tx_hash);
-    info!("  NOTE: Transaction is NOT submitted on-chain");
-    pass("Invoke transaction constructed and signed");
-
-    // Use the deploy block as the reference block for proving.
-    // The contract must exist at the reference block, so we can't go earlier than deploy.
-    // The gateway retry loop handles the case where the gateway hasn't caught up yet.
-    let block_number = deploy_block;
-    info!("  Using deploy block {block_number} as proving reference (contract exists at this state)");
-
-    // Write the constructed tx to disk for the prove command
-    let tx_json_path = args.output_dir.join("e2e_tx.json");
-    tokio::fs::write(&tx_json_path, serde_json::to_string_pretty(&tx_json)?).await?;
-
-    // ==========================================
-    // STEP 6: Run virtual OS and prove transaction
-    // ==========================================
-    step(6, "Run virtual OS and prove transaction");
+    let sender_felt = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
+    let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
+    let chain_id = config.chain_id_felt();
+    let resource_bounds = ResourceBounds::default();
 
     let env_prover_url = std::env::var("PROVER_URL").ok().filter(|s| !s.is_empty());
-    let prover_url = args
-        .prover_url
-        .as_deref()
-        .or(env_prover_url.as_deref());
+    let prover_url = args.prover_url.as_deref().or(env_prover_url.as_deref());
 
     if prover_url.is_none() && !config.deps_dir.join("sequencer").exists() {
         fail("No prover available -- set --prover-url or run `snip36 setup`");
         bail!("no prover available");
     }
 
-    let proof_output = args.output_dir.join("e2e.proof");
-    info!("  Proving against block {block_number}");
-
-    let mut prove_args = vec![
-        "prove".to_string(),
-        "virtual-os".to_string(),
-        "--block-number".to_string(),
-        block_number.to_string(),
-        "--tx-json".to_string(),
-        tx_json_path.to_string_lossy().to_string(),
-        "--rpc-url".to_string(),
-        config.rpc_url.clone(),
-        "--output".to_string(),
-        proof_output.to_string_lossy().to_string(),
-    ];
-
-    if let Some(url) = prover_url {
-        prove_args.push("--prover-url".to_string());
-        prove_args.push(url.to_string());
-        info!("  Using remote prover: {url}");
-    } else {
-        // Pass STRK fee token for local runner
-        prove_args.push("--strk-fee-token".to_string());
-        prove_args.push(STRK_TOKEN.to_string());
-        info!("  STRK fee token: {STRK_TOKEN}");
-    }
-
-    // Run prove as a subprocess using the current binary
     let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));
-    let prove_status = tokio::process::Command::new(&current_exe)
-        .args(&prove_args)
-        .status()
-        .await
-        .wrap_err("failed to run prove command")?;
-
-    if prove_status.success() && proof_output.exists() {
-        let metadata = tokio::fs::metadata(&proof_output).await?;
-        pass(&format!("Proof generated ({} bytes)", metadata.len()));
-    } else {
-        fail("Proof file not created");
-        bail!("proving failed");
-    }
-
-    // ==========================================
-    // STEP 7: Validate proof format
-    // ==========================================
-    step(7, "Validate proof format");
-
-    let proof_b64 = tokio::fs::read_to_string(&proof_output).await?;
-    let proof_len = proof_b64.trim().len();
-
-    if proof_len > 0 {
-        info!("  Proof is base64 ({proof_len} chars)");
-        pass(&format!("Proof is base64 ({proof_len} chars)"));
-    } else {
-        fail("Proof file is empty");
-        bail!("empty proof");
-    }
-
-    // ==========================================
-    // STEP 8: Sign and submit proof to gateway
-    // ==========================================
-    step(8, "Sign and submit proof to gateway");
-
-    let calldata_str = format!(
-        "0x1,{},{},0x1,0x1",
-        contract_address, increment_selector
-    );
-
-    let proof_facts_file = proof_output.with_extension("proof_facts");
-
-    let proof_b64_trimmed = proof_b64.trim().to_string();
-    let proof_facts_str = tokio::fs::read_to_string(&proof_facts_file)
-        .await
-        .wrap_err("failed to read proof_facts")?;
-    let proof_facts_hex = parse_proof_facts_json(&proof_facts_str)
-        .map_err(|e| eyre::eyre!("failed to parse proof_facts: {e}"))?;
-    let proof_facts: Vec<starknet_types_core::felt::Felt> = proof_facts_hex
-        .iter()
-        .map(|h| felt_from_hex(h).map_err(|e| eyre::eyre!(e)))
-        .collect::<Result<_>>()?;
-
-    let calldata_felts: Vec<starknet_types_core::felt::Felt> = calldata_str
-        .split(',')
-        .map(|h| felt_from_hex(h.trim()).map_err(|e| eyre::eyre!(e)))
-        .collect::<Result<_>>()?;
-
-    let sender_address =
-        felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
-    let private_key =
-        felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
-    let chain_id = config.chain_id_felt();
-
-    info!("  Nonce: {nonce}");
-
-    let params = SubmitParams {
-        sender_address,
-        private_key,
-        calldata: calldata_felts,
-        proof_base64: proof_b64_trimmed,
-        proof_facts,
-        nonce: starknet_types_core::felt::Felt::from(nonce),
-        chain_id,
-        resource_bounds: ResourceBounds::default(),
-        gateway_url: config.gateway_url.clone(),
-    };
-
-    let (tx_hash, payload) =
-        sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
-    info!("  Tx hash: {:#x}", tx_hash);
-
-    let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
-    info!("  Submitting to {submit_url}...");
-    info!("  Proof block: {block_number} (gateway may lag behind RPC — will retry if too recent)");
-
     let client = reqwest::Client::new();
-    let max_attempts = 20;
-    let mut accepted = false;
-    let fails_before = FAIL_COUNT.load(Ordering::Relaxed);
 
-    for attempt in 1..=max_attempts {
-        let response = client
-            .post(&submit_url)
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(120))
-            .send()
-            .await;
+    // Read initial counter value
+    let initial_counter = read_counter(&rpc, &contract_address).await.unwrap_or(0);
+    info!("  Initial counter: {initial_counter}");
 
-        match response {
-            Ok(resp) => {
-                let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let mut reference_block = deploy_block;
 
-                if code == "TRANSACTION_RECEIVED" {
-                    info!("  Response: {}", serde_json::to_string_pretty(&body)?);
-                    pass("Proof accepted by gateway (signed submission)");
-                    accepted = true;
-                    break;
-                } else if (msg.contains("too recent") || msg.contains("stored block hash: 0")) && attempt < max_attempts {
-                    info!("  Attempt {attempt}/{max_attempts}: gateway not ready for this block, waiting 10s...");
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    continue;
-                } else {
-                    info!("  Response: {}", serde_json::to_string_pretty(&body)?);
-                    fail(&format!("Proof submission failed: code={code}"));
+    for block_idx in 1..=args.snos_blocks {
+        let step_label = if args.snos_blocks == 1 {
+            "Prove and submit".to_string()
+        } else {
+            format!("Block {block_idx}/{}", args.snos_blocks)
+        };
+        step(4 + block_idx, &step_label);
+
+        // --- Construct invoke transaction ---
+        let nonce = rpc.get_nonce(&config.account_address).await?;
+        let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
+
+        let standard_tx_hash = compute_invoke_v3_tx_hash(
+            sender_felt,
+            &calldata_felts,
+            chain_id,
+            nonce_felt,
+            starknet_types_core::felt::Felt::ZERO,
+            &resource_bounds,
+            &[],
+            &[],
+            0,
+            0,
+            &[], // no proof_facts for virtual OS validation
+        );
+
+        let sig = sign(private_key_felt, standard_tx_hash)
+            .map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+
+        let tx_json = serde_json::json!({
+            "type": "INVOKE",
+            "version": "0x3",
+            "sender_address": &config.account_address,
+            "calldata": calldata,
+            "nonce": format!("{:#x}", nonce),
+            "resource_bounds": resource_bounds.to_rpc_json(),
+            "tip": "0x0",
+            "paymaster_data": [],
+            "account_deployment_data": [],
+            "nonce_data_availability_mode": "L1",
+            "fee_data_availability_mode": "L1",
+            "signature": [format!("{:#x}", sig.r), format!("{:#x}", sig.s)],
+        });
+
+        let tx_path = args.output_dir.join(format!("e2e_tx_{block_idx}.json"));
+        tokio::fs::write(&tx_path, serde_json::to_string_pretty(&tx_json)?).await?;
+
+        info!("  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}", standard_tx_hash);
+        pass("Transaction constructed and signed");
+
+        // --- Prove in virtual OS ---
+        let proof_path = args.output_dir.join(format!("e2e_{block_idx}.proof"));
+
+        let mut prove_args = vec![
+            "prove".to_string(),
+            "virtual-os".to_string(),
+            "--block-number".to_string(),
+            reference_block.to_string(),
+            "--tx-json".to_string(),
+            tx_path.to_string_lossy().to_string(),
+            "--rpc-url".to_string(),
+            config.rpc_url.clone(),
+            "--output".to_string(),
+            proof_path.to_string_lossy().to_string(),
+        ];
+
+        if let Some(url) = prover_url {
+            prove_args.push("--prover-url".to_string());
+            prove_args.push(url.to_string());
+        } else {
+            prove_args.push("--strk-fee-token".to_string());
+            prove_args.push(STRK_TOKEN.to_string());
+        }
+
+        let prove_status = tokio::process::Command::new(&current_exe)
+            .args(&prove_args)
+            .status()
+            .await
+            .wrap_err("failed to run prove command")?;
+
+        if prove_status.success() && proof_path.exists() {
+            let metadata = tokio::fs::metadata(&proof_path).await?;
+            pass(&format!("Proof generated ({} bytes)", metadata.len()));
+        } else {
+            fail("Proof generation failed");
+            bail!("proving failed for block {block_idx}");
+        }
+
+        // --- Validate proof ---
+        let proof_b64 = tokio::fs::read_to_string(&proof_path).await?;
+        if proof_b64.trim().is_empty() {
+            fail("Proof file is empty");
+            bail!("empty proof for block {block_idx}");
+        }
+
+        // --- Submit to gateway ---
+        let proof_facts_file = proof_path.with_extension("proof_facts");
+        let proof_b64_trimmed = proof_b64.trim().to_string();
+        let proof_facts_str = tokio::fs::read_to_string(&proof_facts_file)
+            .await
+            .wrap_err("failed to read proof_facts")?;
+        let proof_facts_hex = parse_proof_facts_json(&proof_facts_str)
+            .map_err(|e| eyre::eyre!("failed to parse proof_facts: {e}"))?;
+        let proof_facts: Vec<starknet_types_core::felt::Felt> = proof_facts_hex
+            .iter()
+            .map(|h| felt_from_hex(h).map_err(|e| eyre::eyre!(e)))
+            .collect::<Result<_>>()?;
+
+        let params = SubmitParams {
+            sender_address: sender_felt,
+            private_key: private_key_felt,
+            calldata: calldata_felts.clone(),
+            proof_base64: proof_b64_trimmed,
+            proof_facts,
+            nonce: nonce_felt,
+            chain_id,
+            resource_bounds: ResourceBounds::default(),
+            gateway_url: config.gateway_url.clone(),
+        };
+
+        let (tx_hash, payload) =
+            sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+
+        let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
+        info!("  Submitting tx {:#x} to gateway...", tx_hash);
+        info!("  Proof block: {reference_block} (gateway may lag — will retry if needed)");
+
+        let max_attempts = 20;
+        let mut accepted = false;
+        let fails_before = FAIL_COUNT.load(Ordering::Relaxed);
+
+        for attempt in 1..=max_attempts {
+            let response = client
+                .post(&submit_url)
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(120))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+
+                    if code == "TRANSACTION_RECEIVED" {
+                        pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
+                        accepted = true;
+                        break;
+                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                        && attempt < max_attempts
+                    {
+                        info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    } else {
+                        info!("  Response: {}", serde_json::to_string_pretty(&body)?);
+                        fail(&format!("Gateway rejected: code={code}"));
+                        break;
+                    }
+                }
+                Err(e) => {
+                    fail(&format!("Gateway request failed: {e}"));
                     break;
                 }
             }
-            Err(e) => {
-                fail(&format!("Gateway request failed: {e}"));
-                break;
-            }
         }
-    }
 
-    if !accepted && FAIL_COUNT.load(Ordering::Relaxed) == fails_before {
-        fail("Gateway did not accept proof after all retries");
-    }
+        if !accepted {
+            if FAIL_COUNT.load(Ordering::Relaxed) == fails_before {
+                fail("Gateway did not accept after all retries");
+            }
+            bail!("gateway submission failed for block {block_idx}");
+        }
 
-    // ==========================================
-    // STEP 9: Verify counter incremented
-    // ==========================================
-    step(9, "Verify counter incremented on-chain");
-
-    if accepted {
-        // Read counter value before the proven tx lands
-        let counter_before = read_counter(&rpc, &contract_address).await;
-        info!("  Counter before: {counter_before:?}");
-
-        // Wait for the proven transaction to be included
-        info!("  Waiting for proven tx {:#x} to be included...", tx_hash);
+        // --- Wait for tx inclusion and verify counter ---
         let tx_hash_hex = format!("{:#x}", tx_hash);
+        info!("  Waiting for tx {tx_hash_hex} to be included...");
+
         match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
-                info!("  Proven tx included in block {bn}");
+                info!("  Tx included in block {bn}");
+                reference_block = bn;
             }
             Err(e) => {
-                fail(&format!("Proven tx not confirmed: {e}"));
+                fail(&format!("Tx not confirmed: {e}"));
+                bail!("tx confirmation failed for block {block_idx}");
             }
         }
 
-        // Read counter value after
         let counter_after = read_counter(&rpc, &contract_address).await;
-        info!("  Counter after:  {counter_after:?}");
+        let expected = initial_counter + increment_per_block * block_idx as u64;
 
-        match (counter_before, counter_after) {
-            (Some(before), Some(after)) if after == before + 1 => {
-                pass(&format!("Counter incremented: {before} -> {after}"));
+        match counter_after {
+            Some(actual) if actual == expected => {
+                pass(&format!("Counter verified: {actual} (expected {expected})"));
             }
-            (Some(before), Some(after)) => {
-                fail(&format!("Counter did not increment as expected: {before} -> {after}"));
+            Some(actual) => {
+                fail(&format!("Counter mismatch: got {actual}, expected {expected}"));
+                bail!("counter verification failed for block {block_idx}");
             }
-            (None, Some(after)) if after == 1 => {
-                pass(&format!("Counter value is {after} (could not read before)"));
-            }
-            _ => {
+            None => {
                 fail("Could not read counter value");
+                bail!("counter read failed for block {block_idx}");
             }
         }
-    } else {
-        info!("  Skipping counter verification (proof not accepted)");
+    }
+
+    // ==========================================
+    // Final verification
+    // ==========================================
+    step(5 + args.snos_blocks, "Final verification");
+
+    let final_counter = read_counter(&rpc, &contract_address).await;
+    let expected_final = initial_counter + total_expected;
+
+    match final_counter {
+        Some(actual) if actual == expected_final => {
+            pass(&format!(
+                "All {} blocks verified: counter {} -> {} (+{})",
+                args.snos_blocks, initial_counter, actual, total_expected
+            ));
+        }
+        Some(actual) => {
+            fail(&format!(
+                "Final counter mismatch: got {actual}, expected {expected_final} \
+                 (initial {initial_counter} + {total_expected})"
+            ));
+        }
+        None => {
+            fail("Could not read final counter");
+        }
     }
 
     // ==========================================
