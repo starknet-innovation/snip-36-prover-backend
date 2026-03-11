@@ -37,7 +37,7 @@ pub async fn deploy_account(
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            "ci-health-check",
             "deploy",
             "--class-hash",
             OZ_ACCOUNT_CLASS_HASH,
@@ -115,17 +115,13 @@ pub async fn deploy_counter(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployCounterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let contracts_dir = state.config.contracts_dir();
-    let cwd = contracts_dir
-        .parent()
-        .unwrap_or(&contracts_dir)
-        .to_path_buf();
+    let cwd = state.config.contracts_dir();
 
     // Declare
     let declare_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            "ci-health-check",
             "declare",
             "--contract-name",
             "Counter",
@@ -155,7 +151,7 @@ pub async fn deploy_counter(
     let deploy_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            "ci-health-check",
             "deploy",
             "--class-hash",
             &class_hash,

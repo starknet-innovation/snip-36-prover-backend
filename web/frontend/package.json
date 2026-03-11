@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n server,vite -c blue,green \"cd ../.. && cargo run -p snip36-server\" \"vite\"",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
@@ -17,6 +17,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.1",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"
   }

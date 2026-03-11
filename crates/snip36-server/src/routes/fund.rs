@@ -30,16 +30,16 @@ pub async fn fund_account(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FundRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let amount_wei: u128 = 10 * 10u128.pow(18);
-    let amount_low = format!("{:#x}", amount_wei & ((1u128 << 128) - 1));
-    let amount_high = format!("{:#x}", amount_wei >> 128);
+    let amount_wei: u128 = 10u128.pow(16); // 0.01 STRK
+    let amount_low = format!("{:#x}", amount_wei);
+    let amount_high = "0x0";
 
     let calldata = format!("{} {} {}", req.account_address, amount_low, amount_high);
 
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            "ci-health-check",
             "invoke",
             "--contract-address",
             STRK_TOKEN,
@@ -82,7 +82,7 @@ pub async fn fund_account(
 
     Ok(Json(FundResponse {
         tx_hash,
-        amount: "10 STRK".to_string(),
+        amount: "0.01 STRK".to_string(),
         block_number: bn,
     }))
 }

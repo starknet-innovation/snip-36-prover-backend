@@ -311,7 +311,7 @@ export default function App() {
       {/* Step 2: Fund Account */}
       <StepCard number={2} title="Fund Account with STRK" status={steps[2]}>
         <p style={descStyle}>
-          The backend's master account will transfer 10 STRK to your generated
+          The backend's master account will transfer 0.01 STRK to your generated
           address.
         </p>
         <button onClick={handleFund} disabled={loading} style={btnStyle}>

@@ -35,8 +35,10 @@ async fn main() -> color_eyre::Result<()> {
 
     let app = routes::api_router().with_state(state).layer(cors);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    info!("Listening on 0.0.0.0:8080");
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8090".into());
+    let addr = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("Listening on {addr}");
     axum::serve(listener, app).await?;
 
     Ok(())
