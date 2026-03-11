@@ -19,9 +19,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install starknet-foundry (sncast)
+        shell: bash
         run: |
           curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
-          "$HOME/.starknet-foundry/bin/snfoundryup"
+          source "$HOME/.bashrc" 2>/dev/null || true
+          export PATH="$HOME/.local/bin:$HOME/.starknet-foundry/bin:$PATH"
+          snfoundryup
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.starknet-foundry/bin" >> "$GITHUB_PATH"
 
       - name: Install scarb
