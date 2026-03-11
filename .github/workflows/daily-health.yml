@@ -31,7 +31,7 @@ jobs:
       - name: Install scarb
         uses: software-mansion/setup-scarb@v1
         with:
-          scarb-version: "2.11.4"
+          scarb-version: "2.15.2"
 
       - name: Verify tools
         run: |

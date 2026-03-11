@@ -257,7 +257,7 @@ def check_full_flow():
         ["scarb", "build"], capture_output=True, text=True, cwd=contracts_dir
     )
     if build.returncode != 0:
-        check_fail("Compile counter", build.stderr)
+        check_fail("Compile counter", (build.stderr or build.stdout)[:500])
         return
     check_pass("Compile counter")
 
