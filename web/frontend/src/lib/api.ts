@@ -42,7 +42,7 @@ export const api = {
     }),
 
   deployCounter: (sessionId: string) =>
-    post<{ class_hash: string; contract_address: string; tx_hash: string }>(
+    post<{ class_hash: string; contract_address: string; tx_hash: string; block_number: number | null }>(
       "/deploy-counter",
       { session_id: sessionId }
     ),
@@ -70,9 +70,19 @@ export const api = {
       nonce: params.nonce,
     }),
 
-  /** Returns an EventSource for SSE streaming of proof logs. */
+  /** Returns an EventSource for SSE streaming of proof logs (legacy). */
   proveStream: (sessionId: string): EventSource =>
     new EventSource(`${API_BASE}/prove/${sessionId}`),
+
+  /** Returns an EventSource for the full SNIP-36 prove-and-submit cycle. */
+  proveBlock: (
+    sessionId: string,
+    incrementAmount: number,
+    incrementsPerBlock: number,
+  ): EventSource =>
+    new EventSource(
+      `${API_BASE}/prove-block/${sessionId}?increment_amount=${incrementAmount}&increments_per_block=${incrementsPerBlock}`
+    ),
 
   submitProof: (sessionId: string) =>
     post<{ tx_hash?: string; output: string }>("/submit-proof", {

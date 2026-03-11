@@ -202,6 +202,8 @@ pub async fn deploy_counter(
     let mut session = state.get_session(&req.session_id);
     session.contract_address = Some(contract_address.clone());
     session.class_hash = Some(class_hash.clone());
+    session.deploy_block = block_number;
+    session.last_reference_block = block_number;
     state.update_session(&req.session_id, session);
 
     Ok(Json(DeployCounterResponse {

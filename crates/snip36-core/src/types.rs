@@ -125,6 +125,10 @@ pub struct Session {
     pub invoke_block: Option<u64>,
     pub prove_block: Option<u64>,
     pub proof_file: Option<String>,
+    /// Block number where the counter contract was deployed.
+    pub deploy_block: Option<u64>,
+    /// Reference block for the next prove (updated after each proven tx lands).
+    pub last_reference_block: Option<u64>,
 }
 
 // Well-known constants
