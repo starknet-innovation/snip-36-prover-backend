@@ -451,9 +451,39 @@ pub async fn prove_block(
 
             match response {
                 Ok(resp) => {
-                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let status = resp.status();
+                    let resp_text = match resp.text().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            send("error", &format!("Failed to read gateway response: {e}")).await;
+                            return;
+                        }
+                    };
+
+                    let body: serde_json::Value =
+                        serde_json::from_str(&resp_text).unwrap_or_default();
                     let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
                     let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+
+                    // Surface non-2xx HTTP errors that aren't retryable
+                    if status.is_server_error() && attempt < max_attempts {
+                        send(
+                            "log",
+                            &format!(
+                                "Gateway HTTP {status} (attempt {attempt}/{max_attempts}), retrying..."
+                            ),
+                        )
+                        .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        continue;
+                    } else if status.is_client_error() && code.is_empty() {
+                        send(
+                            "error",
+                            &format!("Gateway HTTP {status}: {resp_text}"),
+                        )
+                        .await;
+                        return;
+                    }
 
                     if code == "TRANSACTION_RECEIVED" {
                         send(
