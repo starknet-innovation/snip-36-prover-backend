@@ -19,10 +19,12 @@ Each step includes an explainer toggle with educational context.
 ## Quick Start
 
 ```bash
-# 1. Set up the master account (one-time)
-./web/setup-master.sh
+# 1. Configure environment (one-time)
+cp .env.example .env
+# Edit .env with your funded account credentials:
+#   STARKNET_RPC_URL, STARKNET_ACCOUNT_ADDRESS, STARKNET_PRIVATE_KEY
 
-# 2. Start the backend (Rust)
+# 2. Start the backend (Rust) — imports sncast account automatically on startup
 cargo run --release -p snip36-server
 
 # 3. Start the frontend (in another terminal)
