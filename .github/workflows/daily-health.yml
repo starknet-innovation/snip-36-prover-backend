@@ -45,7 +45,7 @@ jobs:
 
       - name: Verify tools
         run: |
-          ./target/release/snip36 --help
+          ./snip36 --help
           sncast --version
           scarb --version
 
@@ -54,4 +54,4 @@ jobs:
           STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
-        run: ./target/release/snip36 health
+        run: ./snip36 health

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Wrapper to run the snip36 CLI from the repo root.
+# Prefers release build, falls back to debug.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -x "$SCRIPT_DIR/target/release/snip36" ]; then
+    exec "$SCRIPT_DIR/target/release/snip36" "$@"
+elif [ -x "$SCRIPT_DIR/target/debug/snip36" ]; then
+    exec "$SCRIPT_DIR/target/debug/snip36" "$@"
+else
+    echo "snip36 binary not found. Build it first:" >&2
+    echo "  cargo build --release -p snip36-cli" >&2
+    exit 1
+fi
