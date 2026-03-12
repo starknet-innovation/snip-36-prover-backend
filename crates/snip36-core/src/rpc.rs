@@ -200,12 +200,21 @@ impl StarknetRpc {
                     .get("finality_status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                let execution_status = receipt
+                    .get("execution_status")
+                    .and_then(|v| v.as_str());
                 let has_block = receipt.get("block_number").is_some();
 
-                if status == "REJECTED" {
+                if status == "REJECTED"
+                    || matches!(execution_status, Some("REVERTED"))
+                {
                     return Err(RpcError::TxRejected(receipt.to_string()));
                 }
-                if (status == "ACCEPTED_ON_L2" || status == "ACCEPTED_ON_L1") && has_block {
+                if (status == "ACCEPTED_ON_L2" || status == "ACCEPTED_ON_L1")
+                    && has_block
+                    && (execution_status.is_none()
+                        || matches!(execution_status, Some("SUCCEEDED")))
+                {
                     return Ok(receipt);
                 }
             }
