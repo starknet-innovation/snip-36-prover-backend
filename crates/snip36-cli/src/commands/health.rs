@@ -360,7 +360,13 @@ async fn check_full_flow(config: &Config, rpc: &StarknetRpc) {
     };
 
     match rpc.wait_for_tx(&invoke_tx, 120, 3).await {
-        Ok(_) => check_pass("Invoke tx confirmed", ""),
+        Ok(receipt) => {
+            check_pass("Invoke tx confirmed", "");
+            // Wait for next block so `latest` state reflects the invoke
+            if let Some(bn) = snip36_core::rpc::receipt_block_number(&receipt) {
+                let _ = rpc.wait_for_block_after(bn, 120, 3).await;
+            }
+        }
         Err(_) => {
             check_fail("Invoke tx confirmation", "timeout");
             return;
