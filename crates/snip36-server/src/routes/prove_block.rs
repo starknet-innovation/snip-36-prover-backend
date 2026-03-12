@@ -37,15 +37,35 @@ fn default_one_u32() -> u32 {
 }
 
 /// Find the snip36 CLI binary.
+///
+/// Search order: SNIP36_CLI_BIN env, sibling of current exe (covers both
+/// `cargo run` and installed layouts since both workspace binaries land in
+/// the same target/{debug,release} directory), then PATH fallback.
 fn find_snip36_bin() -> PathBuf {
     if let Ok(bin) = std::env::var("SNIP36_CLI_BIN") {
         return PathBuf::from(bin);
     }
     if let Ok(exe) = std::env::current_exe() {
+        // When running via `cargo run -p snip36-server`, the exe sits in
+        // target/{debug,release}/ — the CLI binary is built there too as
+        // long as both crates are in the same workspace.
         if let Some(dir) = exe.parent() {
             let cli = dir.join("snip36");
             if cli.exists() {
                 return cli;
+            }
+        }
+    }
+    // Also check the workspace target dirs relative to CARGO_MANIFEST_DIR
+    // (covers `cargo run` when current_exe resolves to a different path).
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        for profile in &["release", "debug"] {
+            let candidate = PathBuf::from(&manifest_dir)
+                .join("../../target")
+                .join(profile)
+                .join("snip36");
+            if candidate.exists() {
+                return candidate;
             }
         }
     }
