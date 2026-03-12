@@ -35,14 +35,14 @@ export const api = {
     }),
 
   deployAccount: (sessionId: string, publicKey: string, accountAddress: string) =>
-    post<{ account_address: string; tx_hash: string }>("/deploy-account", {
+    post<{ account_address: string; tx_hash: string | null; block_number: number | null }>("/deploy-account", {
       session_id: sessionId,
       public_key: publicKey,
       account_address: accountAddress,
     }),
 
   deployCounter: (sessionId: string) =>
-    post<{ class_hash: string; contract_address: string; tx_hash: string; block_number: number | null }>(
+    post<{ class_hash: string; contract_address: string; tx_hash: string | null; block_number: number | null }>(
       "/deploy-counter",
       { session_id: sessionId }
     ),
