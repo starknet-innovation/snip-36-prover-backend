@@ -432,7 +432,7 @@ pub async fn prove_block(
 
         send(
             "log",
-            &format!("Submitting tx {} to gateway...", &gw_tx_hash_hex[..18]),
+            &format!("Submitting tx {} to gateway...", gw_tx_hash_hex.get(..18).unwrap_or(&gw_tx_hash_hex)),
         )
         .await;
 
