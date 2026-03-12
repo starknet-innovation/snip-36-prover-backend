@@ -146,8 +146,12 @@ pub struct Signature {
 }
 
 /// Sign a message hash with an ECDSA private key on the Stark curve.
+///
+/// Uses RFC-6979 deterministic nonce generation to avoid nonce reuse,
+/// which would leak the private key.
 pub fn sign(private_key: Felt, message_hash: Felt) -> Result<Signature, SignError> {
-    let sig = starknet_crypto::sign(&private_key, &message_hash, &Felt::ONE)
+    let k = starknet_crypto::rfc6979_generate_k(&message_hash, &private_key, None);
+    let sig = starknet_crypto::sign(&private_key, &message_hash, &k)
         .map_err(|e| SignError::Ecdsa(e.to_string()))?;
     Ok(Signature { r: sig.r, s: sig.s })
 }

@@ -79,13 +79,22 @@ impl StarknetRpc {
             .ok_or_else(|| RpcError::Unexpected(format!("expected string chain id: {result}")))
     }
 
-    /// Get the nonce for a contract address.
+    /// Get the nonce for a contract address at the latest block.
     pub async fn get_nonce(&self, address: &str) -> Result<u64, RpcError> {
+        self.get_nonce_at_block(address, serde_json::json!("latest")).await
+    }
+
+    /// Get the nonce for a contract address at a specific block.
+    pub async fn get_nonce_at_block(
+        &self,
+        address: &str,
+        block_id: serde_json::Value,
+    ) -> Result<u64, RpcError> {
         let result = self
             .call(
                 "starknet_getNonce",
                 serde_json::json!({
-                    "block_id": "latest",
+                    "block_id": block_id,
                     "contract_address": address,
                 }),
             )

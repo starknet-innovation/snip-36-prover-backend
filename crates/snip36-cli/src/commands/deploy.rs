@@ -59,7 +59,7 @@ async fn deploy_account(
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            &config.sncast_account(),
             "deploy",
             "--class-hash",
             OZ_ACCOUNT_CLASS_HASH,
@@ -107,7 +107,7 @@ async fn deploy_counter(
     let declare_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            &config.sncast_account(),
             "declare",
             "--contract-name",
             "Counter",
@@ -144,7 +144,7 @@ async fn deploy_counter(
     let deploy_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            &config.sncast_account(),
             "deploy",
             "--class-hash",
             &class_hash,

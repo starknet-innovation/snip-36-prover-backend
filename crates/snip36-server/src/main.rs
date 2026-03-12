@@ -25,6 +25,9 @@ async fn main() -> color_eyre::Result<()> {
     let config = Config::from_env(None)?;
     info!(rpc_url = %config.rpc_url, "Starting SNIP-36 server");
 
+    // Import the sncast account so deploy/fund routes work on fresh installs
+    ensure_sncast_account(&config).await;
+
     let state = Arc::new(AppState::new(config));
 
     // CORS: allow all origins (playground demo)
@@ -42,4 +45,51 @@ async fn main() -> color_eyre::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Import the master account into sncast so deploy/fund routes can use it.
+///
+/// This is idempotent — if the account already exists, sncast returns an error
+/// which we silently ignore.
+async fn ensure_sncast_account(config: &Config) {
+    let account_name = config.sncast_account();
+    info!(account = %account_name, "Importing sncast account");
+
+    let result = tokio::process::Command::new("sncast")
+        .args([
+            "account",
+            "import",
+            "--name",
+            &account_name,
+            "--address",
+            &config.account_address,
+            "--private-key",
+            &config.private_key,
+            "--type",
+            "oz",
+            "--url",
+            &config.rpc_url,
+        ])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            if output.status.success() {
+                info!("sncast account '{account_name}' imported");
+            } else if combined.contains("already exists") {
+                info!("sncast account '{account_name}' already exists");
+            } else {
+                tracing::warn!("sncast account import failed: {combined}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Could not run sncast to import account: {e}");
+        }
+    }
 }

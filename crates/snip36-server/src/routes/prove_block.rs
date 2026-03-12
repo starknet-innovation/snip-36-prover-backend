@@ -159,10 +159,19 @@ pub async fn prove_block(
         };
         let resource_bounds = ResourceBounds::default();
 
-        let nonce = match state.rpc.get_nonce(&state.config.account_address).await {
+        // Get nonce at reference_block so the tx is valid for the state being proven,
+        // rather than at `latest` which may have been bumped by other sessions/txs.
+        let nonce = match state
+            .rpc
+            .get_nonce_at_block(
+                &state.config.account_address,
+                serde_json::json!({"block_number": reference_block}),
+            )
+            .await
+        {
             Ok(n) => n,
             Err(e) => {
-                send("error", &format!("Failed to get nonce: {e}")).await;
+                send("error", &format!("Failed to get nonce at block {reference_block}: {e}")).await;
                 return;
             }
         };

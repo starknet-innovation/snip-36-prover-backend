@@ -33,7 +33,7 @@ pub async fn run(args: FundArgs, env_file: Option<&std::path::Path>) -> Result<(
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "playground-master",
+            &config.sncast_account(),
             "invoke",
             "--contract-address",
             STRK_TOKEN,
