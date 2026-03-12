@@ -23,7 +23,7 @@ pub struct DeployAccountRequest {
 #[derive(Serialize)]
 pub struct DeployAccountResponse {
     pub account_address: String,
-    pub tx_hash: Option<String>,
+    pub tx_hash: String,
     pub block_number: Option<u64>,
 }
 
@@ -56,6 +56,13 @@ pub async fn deploy_account(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
 
+    if !output.status.success() {
+        return Err(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Account deploy failed (exit {}): {combined}", output.status),
+        ));
+    }
+
     let address = parse_hex("contract_address", &combined).ok_or_else(|| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -63,24 +70,20 @@ pub async fn deploy_account(
         )
     })?;
 
-    let tx_hash = parse_hex("transaction_hash", &combined);
-    let mut block_number = None;
+    let tx_hash = parse_hex("transaction_hash", &combined).ok_or_else(|| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Deploy succeeded but no transaction_hash in output: {combined}"),
+        )
+    })?;
 
-    if let Some(ref hash) = tx_hash {
-        info!(tx_hash = %hash, "Deploy account tx submitted");
-        match state.rpc.wait_for_tx(hash, 120, 2).await {
-            Ok(receipt) => {
-                let bn = receipt_block_number(&receipt);
-                info!(block_number = ?bn, "Deploy account confirmed");
-                block_number = bn;
-                if let Some(block) = bn {
-                    let _ = state.rpc.wait_for_block_after(block, 120, 2).await;
-                }
-            }
-            Err(e) => {
-                return Err(error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()));
-            }
-        }
+    info!(tx_hash = %tx_hash, "Deploy account tx submitted");
+    let receipt = state.rpc.wait_for_tx(&tx_hash, 120, 2).await
+        .map_err(|e| error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()))?;
+    let block_number = receipt_block_number(&receipt);
+    info!(block_number = ?block_number, "Deploy account confirmed");
+    if let Some(block) = block_number {
+        let _ = state.rpc.wait_for_block_after(block, 120, 2).await;
     }
 
     // Store the actual deployed address, not the client-provided one
@@ -112,7 +115,7 @@ pub struct DeployCounterRequest {
 pub struct DeployCounterResponse {
     pub class_hash: String,
     pub contract_address: String,
-    pub tx_hash: Option<String>,
+    pub tx_hash: String,
     pub block_number: Option<u64>,
 }
 
@@ -176,6 +179,13 @@ pub async fn deploy_counter(
     let deploy_stderr = String::from_utf8_lossy(&deploy_output.stderr);
     let deploy_combined = format!("{deploy_stdout}\n{deploy_stderr}");
 
+    if !deploy_output.status.success() {
+        return Err(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Counter deploy failed (exit {}): {deploy_combined}", deploy_output.status),
+        ));
+    }
+
     let contract_address = parse_hex("contract_address", &deploy_combined).ok_or_else(|| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -183,24 +193,20 @@ pub async fn deploy_counter(
         )
     })?;
 
-    let tx_hash = parse_hex("transaction_hash", &deploy_combined);
-    let mut block_number = None;
+    let tx_hash = parse_hex("transaction_hash", &deploy_combined).ok_or_else(|| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Deploy succeeded but no transaction_hash in output: {deploy_combined}"),
+        )
+    })?;
 
-    if let Some(ref hash) = tx_hash {
-        info!(tx_hash = %hash, "Deploy counter tx submitted");
-        match state.rpc.wait_for_tx(hash, 120, 2).await {
-            Ok(receipt) => {
-                let bn = receipt_block_number(&receipt);
-                info!(block_number = ?bn, "Deploy counter confirmed");
-                block_number = bn;
-                if let Some(block) = bn {
-                    let _ = state.rpc.wait_for_block_after(block, 120, 2).await;
-                }
-            }
-            Err(e) => {
-                return Err(error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()));
-            }
-        }
+    info!(tx_hash = %tx_hash, "Deploy counter tx submitted");
+    let receipt = state.rpc.wait_for_tx(&tx_hash, 120, 2).await
+        .map_err(|e| error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()))?;
+    let block_number = receipt_block_number(&receipt);
+    info!(block_number = ?block_number, "Deploy counter confirmed");
+    if let Some(block) = block_number {
+        let _ = state.rpc.wait_for_block_after(block, 120, 2).await;
     }
 
     state.update_session_with(&req.session_id, |session| {
