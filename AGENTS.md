@@ -38,7 +38,7 @@ cargo build --release -p snip36-cli  # Build the CLI
 cargo build --release -p snip36-server  # Build the web backend
 
 # External dependencies (stwo prover, starknet_os_runner):
-snip36 setup                         # Or ./scripts/setup.sh
+snip36 setup                         # Install external deps
 ```
 
 ## CLI Usage
