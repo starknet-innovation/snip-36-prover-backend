@@ -13,10 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
         with:
-          python-version: '3.11'
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build snip36 CLI
+        run: cargo build --release -p snip36-cli
 
       - name: Install starknet-foundry (sncast)
         shell: bash
@@ -35,13 +45,13 @@ jobs:
 
       - name: Verify tools
         run: |
+          ./target/release/snip36 --help
           sncast --version
           scarb --version
-          python3 --version
 
       - name: Run health check
         env:
           STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
-        run: python3 tests/ci-health-check.py
+        run: ./target/release/snip36 health
