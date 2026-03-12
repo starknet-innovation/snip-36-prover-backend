@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DEPS_DIR="$PROJECT_DIR/deps"
 OUTPUT_DIR="$PROJECT_DIR/output"
+VENV_DIR="$PROJECT_DIR/sequencer_venv"
+STWO_NIGHTLY="nightly-2025-07-14"
 
 usage() {
     echo "Usage: $0 --block-number <N> --tx-hash <HASH> --rpc-url <URL> [OPTIONS]"
@@ -124,10 +126,15 @@ else
 
     RUNNER_BIN="$DEPS_DIR/sequencer/target/release/starknet_os_runner"
     if [ ! -f "$RUNNER_BIN" ]; then
-        echo "Building starknet_os_runner..."
-        cargo build --release \
-            --manifest-path "$DEPS_DIR/sequencer/Cargo.toml" \
-            -p starknet_os_runner
+        echo "Building starknet_os_runner (toolchain: $STWO_NIGHTLY, feature: stwo_proving)..."
+        (
+            if [ -d "$VENV_DIR" ]; then
+                export PATH="$VENV_DIR/bin:$PATH"
+            fi
+            cargo +"$STWO_NIGHTLY" build --release \
+                --manifest-path "$DEPS_DIR/sequencer/Cargo.toml" \
+                -p starknet_os_runner --features stwo_proving
+        )
     fi
 
     if [ ! -f "$RUNNER_BIN" ]; then
