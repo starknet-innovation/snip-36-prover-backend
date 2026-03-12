@@ -24,9 +24,11 @@ pub fn encode_proof_base64(bytes: &[u8]) -> String {
 pub fn cairo_serde_to_base64(felts: &[String]) -> Result<String, ProofError> {
     let mut packed = Vec::with_capacity(felts.len() * 4);
     for felt_hex in felts {
-        let value = u64::from_str_radix(felt_hex.trim_start_matches("0x"), 16)
+        let felt = starknet_types_core::felt::Felt::from_hex(felt_hex)
             .map_err(|e| ProofError::InvalidFelt(format!("{felt_hex}: {e}")))?;
-        let u32_val = (value & 0xFFFFFFFF) as u32;
+        let bytes = felt.to_bytes_be();
+        // Truncate to low 32 bits (last 4 bytes of the 32-byte big-endian representation)
+        let u32_val = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
         packed.extend_from_slice(&u32_val.to_be_bytes());
     }
     Ok(encode_proof_base64(&packed))

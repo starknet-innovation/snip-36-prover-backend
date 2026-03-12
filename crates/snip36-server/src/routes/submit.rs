@@ -54,11 +54,6 @@ pub async fn submit_proof(
         .as_deref()
         .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "No counter contract in session"))?;
 
-    let account_address = session
-        .account_address
-        .as_deref()
-        .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "No account in session"))?;
-
     // Read proof (base64 string)
     let proof_base64 = tokio::fs::read_to_string(proof_file)
         .await
@@ -106,18 +101,21 @@ pub async fn submit_proof(
         Felt::ONE,
     ];
 
-    // Get nonce
-    let nonce = state
-        .rpc
-        .get_nonce(account_address)
-        .await
-        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-
-    let sender_address = felt_from_hex(account_address)
+    // Sign and submit as the configured master account (whose private key we have)
+    let sender_address = felt_from_hex(&state.config.account_address)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     let private_key = felt_from_hex(&state.config.private_key)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-    let chain_id = state.config.chain_id_felt();
+    let chain_id = state.config.chain_id_felt().map_err(|e| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    })?;
+
+    // Get nonce for the master account
+    let nonce = state
+        .rpc
+        .get_nonce(&state.config.account_address)
+        .await
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let params = SubmitParams {
         sender_address,
@@ -156,6 +154,7 @@ pub async fn submit_proof(
             )
         })?;
 
+    let status = resp.status();
     let resp_text = resp.text().await.map_err(|e| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -163,7 +162,26 @@ pub async fn submit_proof(
         )
     })?;
 
-    info!(response = %resp_text, "Gateway response");
+    info!(status = %status, response = %resp_text, "Gateway response");
+
+    if !status.is_success() {
+        return Err(error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("Gateway rejected transaction (HTTP {status}): {resp_text}"),
+        ));
+    }
+
+    // Verify gateway accepted the transaction
+    if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&resp_text) {
+        if let Some(code) = resp_json.get("code").and_then(|c| c.as_str()) {
+            if code != "TRANSACTION_RECEIVED" {
+                return Err(error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Gateway rejected transaction (code={code}): {resp_text}"),
+                ));
+            }
+        }
+    }
 
     Ok(Json(SubmitProofResponse {
         tx_hash: Some(tx_hash_hex),

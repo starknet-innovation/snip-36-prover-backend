@@ -74,7 +74,7 @@ pub async fn run(args: SubmitArgs, env_file: Option<&std::path::Path>) -> Result
         felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
     let private_key =
         felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
-    let chain_id = config.chain_id_felt();
+    let chain_id = config.chain_id_felt()?;
 
     let resource_bounds = ResourceBounds::default();
 

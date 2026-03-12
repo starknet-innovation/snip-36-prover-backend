@@ -37,7 +37,7 @@ pub async fn deploy_account(
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "ci-health-check",
+            &state.config.sncast_account(),
             "deploy",
             "--class-hash",
             OZ_ACCOUNT_CLASS_HASH,
@@ -83,10 +83,18 @@ pub async fn deploy_account(
         }
     }
 
-    let mut session = state.get_session(&req.session_id);
-    session.account_address = Some(req.account_address);
-    session.account_deployed = true;
-    state.update_session(&req.session_id, session);
+    // Store the actual deployed address, not the client-provided one
+    if address != req.account_address {
+        info!(
+            expected = %req.account_address,
+            actual = %address,
+            "Deployed address differs from requested"
+        );
+    }
+    state.update_session_with(&req.session_id, |session| {
+        session.account_address = Some(address.clone());
+        session.account_deployed = true;
+    });
 
     Ok(Json(DeployAccountResponse {
         account_address: address,
@@ -121,7 +129,7 @@ pub async fn deploy_counter(
     let declare_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "ci-health-check",
+            &state.config.sncast_account(),
             "declare",
             "--contract-name",
             "Counter",
@@ -151,7 +159,7 @@ pub async fn deploy_counter(
     let deploy_output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "ci-health-check",
+            &state.config.sncast_account(),
             "deploy",
             "--class-hash",
             &class_hash,
@@ -195,12 +203,12 @@ pub async fn deploy_counter(
         }
     }
 
-    let mut session = state.get_session(&req.session_id);
-    session.contract_address = Some(contract_address.clone());
-    session.class_hash = Some(class_hash.clone());
-    session.deploy_block = block_number;
-    session.last_reference_block = block_number;
-    state.update_session(&req.session_id, session);
+    state.update_session_with(&req.session_id, |session| {
+        session.contract_address = Some(contract_address.clone());
+        session.class_hash = Some(class_hash.clone());
+        session.deploy_block = block_number;
+        session.last_reference_block = block_number;
+    });
 
     Ok(Json(DeployCounterResponse {
         class_hash,

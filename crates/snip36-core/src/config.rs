@@ -70,12 +70,21 @@ impl Config {
     }
 
     /// Encode the chain_id string as a Starknet felt (short string encoding).
-    pub fn chain_id_felt(&self) -> starknet_types_core::felt::Felt {
+    ///
+    /// Returns an error if chain_id exceeds 31 bytes (max Starknet short string).
+    pub fn chain_id_felt(&self) -> Result<starknet_types_core::felt::Felt, ConfigError> {
         let bytes = self.chain_id.as_bytes();
+        if bytes.len() > 31 {
+            return Err(ConfigError::InvalidChainId(format!(
+                "chain_id '{}' is {} bytes, max is 31",
+                self.chain_id,
+                bytes.len()
+            )));
+        }
         let mut buf = [0u8; 32];
         let start = 32 - bytes.len();
         buf[start..].copy_from_slice(bytes);
-        starknet_types_core::felt::Felt::from_bytes_be(&buf)
+        Ok(starknet_types_core::felt::Felt::from_bytes_be(&buf))
     }
 
     /// Path to the stwo-run-and-prove binary.
@@ -103,10 +112,17 @@ impl Config {
     pub fn contracts_dir(&self) -> PathBuf {
         self.project_dir.join("tests/contracts")
     }
+
+    /// The sncast account name for the master/funding account.
+    pub fn sncast_account(&self) -> String {
+        std::env::var("SNCAST_ACCOUNT").unwrap_or_else(|_| "playground-master".into())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("missing required environment variable: {0}")]
     Missing(&'static str),
+    #[error("invalid chain_id: {0}")]
+    InvalidChainId(String),
 }

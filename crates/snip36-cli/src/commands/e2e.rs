@@ -307,7 +307,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
 
     let sender_felt = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
     let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
-    let chain_id = config.chain_id_felt();
+    let chain_id = config.chain_id_felt()?;
     let resource_bounds = ResourceBounds::default();
 
     let env_prover_url = std::env::var("PROVER_URL").ok().filter(|s| !s.is_empty());

@@ -87,9 +87,9 @@ pub async fn prove_transaction(
         .await;
 
         {
-            let mut session = state.get_session(&session_id);
-            session.prove_block = Some(prove_block);
-            state.update_session(&session_id, session);
+            state.update_session_with(&session_id, |session| {
+                session.prove_block = Some(prove_block);
+            });
         }
 
         // Create output directory
@@ -177,9 +177,9 @@ pub async fn prove_transaction(
                 .unwrap_or(0);
 
             {
-                let mut session = state.get_session(&session_id);
-                session.proof_file = Some(proof_output.to_string_lossy().to_string());
-                state.update_session(&session_id, session);
+                state.update_session_with(&session_id, |session| {
+                    session.proof_file = Some(proof_output.to_string_lossy().to_string());
+                });
             }
 
             let data = serde_json::json!({

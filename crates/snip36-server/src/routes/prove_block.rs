@@ -150,7 +150,13 @@ pub async fn prove_block(
                 return;
             }
         };
-        let chain_id = state.config.chain_id_felt();
+        let chain_id = match state.config.chain_id_felt() {
+            Ok(id) => id,
+            Err(e) => {
+                send("error", &format!("Invalid chain_id: {e}")).await;
+                return;
+            }
+        };
         let resource_bounds = ResourceBounds::default();
 
         let nonce = match state.rpc.get_nonce(&state.config.account_address).await {
@@ -471,9 +477,9 @@ pub async fn prove_block(
                 send("log", &format!("Tx included in block {bn}")).await;
 
                 // Update reference block for next prove
-                let mut session = state.get_session(&session_id);
-                session.last_reference_block = Some(bn);
-                state.update_session(&session_id, session);
+                state.update_session_with(&session_id, |session| {
+                    session.last_reference_block = Some(bn);
+                });
             }
             Err(e) => {
                 send("error", &format!("Tx not confirmed: {e}")).await;

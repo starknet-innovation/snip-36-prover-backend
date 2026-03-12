@@ -112,9 +112,9 @@ pub async fn invoke_increment(
     info!(tx_hash = %tx_hash, "Invoke tx submitted");
 
     {
-        let mut session = state.get_session(&req.session_id);
-        session.last_invoke_tx = Some(tx_hash.clone());
-        state.update_session(&req.session_id, session);
+        state.update_session_with(&req.session_id, |session| {
+            session.last_invoke_tx = Some(tx_hash.clone());
+        });
     }
 
     // Wait for tx inclusion so the prover can reference the correct block
@@ -123,9 +123,9 @@ pub async fn invoke_increment(
             let bn = receipt_block_number(&receipt);
             info!(block_number = ?bn, "Invoke tx confirmed");
             if let Some(block) = bn {
-                let mut session = state.get_session(&req.session_id);
-                session.invoke_block = Some(block);
-                state.update_session(&req.session_id, session);
+                state.update_session_with(&req.session_id, |session| {
+                    session.invoke_block = Some(block);
+                });
             }
             Ok(Json(InvokeResponse {
                 tx_hash,

@@ -20,7 +20,7 @@ impl AppState {
         }
     }
 
-    /// Get or create a session for the given ID.
+    /// Get or create a session for the given ID (returns a clone for reading).
     pub fn get_session(&self, session_id: &str) -> Session {
         self.sessions
             .entry(session_id.to_string())
@@ -28,8 +28,9 @@ impl AppState {
             .clone()
     }
 
-    /// Update a session in place.
-    pub fn update_session(&self, session_id: &str, session: Session) {
-        self.sessions.insert(session_id.to_string(), session);
+    /// Atomically mutate a session, avoiding lost-update races from clone + write-back.
+    pub fn update_session_with(&self, session_id: &str, f: impl FnOnce(&mut Session)) {
+        let mut entry = self.sessions.entry(session_id.to_string()).or_default();
+        f(entry.value_mut());
     }
 }

@@ -25,7 +25,7 @@ pub struct FundResponse {
 
 /// POST /api/fund
 ///
-/// Transfer 10 STRK from master account to target address using sncast.
+/// Transfer 0.01 STRK from master account to target address using sncast.
 pub async fn fund_account(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FundRequest>,
@@ -39,7 +39,7 @@ pub async fn fund_account(
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",
-            "ci-health-check",
+            &state.config.sncast_account(),
             "invoke",
             "--contract-address",
             STRK_TOKEN,
