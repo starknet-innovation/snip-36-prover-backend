@@ -92,6 +92,10 @@ pub struct E2eArgs {
     /// Number of increment() calls per SNOS block
     #[arg(long, default_value = "1")]
     increments_per_snos: u32,
+
+    /// Stop after proving — save proof and proof_facts locally without submitting to the gateway
+    #[arg(long)]
+    prove_only: bool,
 }
 
 pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -308,7 +312,6 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let sender_felt = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
     let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
     let chain_id = config.chain_id_felt()?;
-    let resource_bounds = ResourceBounds::default();
 
     let env_prover_url = std::env::var("PROVER_URL").ok().filter(|s| !s.is_empty());
     let prover_url = args.prover_url.as_deref().or(env_prover_url.as_deref());
@@ -339,13 +342,15 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         let nonce = rpc.get_nonce(&config.account_address).await?;
         let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
 
+        // For VOS proving, use zero resource bounds (fees handled by gateway submission)
+        let zero_bounds = ResourceBounds::zero_fee();
         let standard_tx_hash = compute_invoke_v3_tx_hash(
             sender_felt,
             &calldata_felts,
             chain_id,
             nonce_felt,
             starknet_types_core::felt::Felt::ZERO,
-            &resource_bounds,
+            &zero_bounds,
             &[],
             &[],
             0,
@@ -362,7 +367,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "sender_address": &config.account_address,
             "calldata": calldata,
             "nonce": format!("{:#x}", nonce),
-            "resource_bounds": resource_bounds.to_rpc_json(),
+            "resource_bounds": zero_bounds.to_rpc_json(),
             "tip": "0x0",
             "paymaster_data": [],
             "account_deployment_data": [],
@@ -413,6 +418,16 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         } else {
             fail("Proof generation failed");
             bail!("proving failed for block {block_idx}");
+        }
+
+        // --- If prove-only, log saved paths and skip submission ---
+        if args.prove_only {
+            let proof_facts_file = proof_path.with_extension("proof_facts");
+            info!("  --prove-only: skipping gateway submission");
+            info!("  Proof:       {}", proof_path.display());
+            info!("  Proof facts: {}", proof_facts_file.display());
+            pass("Proof and proof_facts saved locally");
+            continue;
         }
 
         // --- Validate proof ---
@@ -539,26 +554,35 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // ==========================================
     // Final verification
     // ==========================================
-    step(5 + args.snos_blocks, "Final verification");
+    if args.prove_only {
+        step(5 + args.snos_blocks, "Prove-only complete");
+        pass(&format!(
+            "All {} block(s) proved — artifacts saved to {}",
+            args.snos_blocks,
+            args.output_dir.display()
+        ));
+    } else {
+        step(5 + args.snos_blocks, "Final verification");
 
-    let final_counter = read_counter(&rpc, &contract_address).await;
-    let expected_final = initial_counter + total_expected;
+        let final_counter = read_counter(&rpc, &contract_address).await;
+        let expected_final = initial_counter + total_expected;
 
-    match final_counter {
-        Some(actual) if actual == expected_final => {
-            pass(&format!(
-                "All {} blocks verified: counter {} -> {} (+{})",
-                args.snos_blocks, initial_counter, actual, total_expected
-            ));
-        }
-        Some(actual) => {
-            fail(&format!(
-                "Final counter mismatch: got {actual}, expected {expected_final} \
-                 (initial {initial_counter} + {total_expected})"
-            ));
-        }
-        None => {
-            fail("Could not read final counter");
+        match final_counter {
+            Some(actual) if actual == expected_final => {
+                pass(&format!(
+                    "All {} blocks verified: counter {} -> {} (+{})",
+                    args.snos_blocks, initial_counter, actual, total_expected
+                ));
+            }
+            Some(actual) => {
+                fail(&format!(
+                    "Final counter mismatch: got {actual}, expected {expected_final} \
+                     (initial {initial_counter} + {total_expected})"
+                ));
+            }
+            None => {
+                fail("Could not read final counter");
+            }
         }
     }
 

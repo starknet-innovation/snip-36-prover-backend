@@ -10,8 +10,10 @@ use tracing::{debug, error, info};
 use snip36_core::Config;
 
 const PROVING_UTILS_VERSION: &str = "main";
-const SEQUENCER_TAG: &str = "APOLLO-PRE-PROOF-DEMO-19";
+const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.1";
 const STWO_NIGHTLY: &str = "nightly-2025-07-14";
+const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
+const RUNNER_BINARY: &str = "starknet_transaction_prover";
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -230,14 +232,14 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     }
     info!("");
 
-    // [6/7] Build starknet_os_runner
+    // [6/7] Build starknet_transaction_prover
     if !args.skip_runner {
-        info!("[6/7] Building starknet_os_runner (requires {STWO_NIGHTLY} + venv)...");
+        info!("[6/7] Building {RUNNER_PACKAGE} (requires {STWO_NIGHTLY} + venv)...");
         info!("  This requires the stwo_proving feature and may take several minutes...");
 
         let pb = ProgressBar::new_spinner();
         pb.set_style(ProgressStyle::default_spinner().template("{spinner} {msg}")?);
-        pb.set_message("Building starknet_os_runner...");
+        pb.set_message(format!("Building {RUNNER_PACKAGE}..."));
         pb.enable_steady_tick(Duration::from_millis(200));
 
         let venv_bin = venv_dir.join("bin");
@@ -255,14 +257,14 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
                 "--manifest-path",
                 &sequencer_dir.join("Cargo.toml").to_string_lossy(),
                 "-p",
-                "starknet_os_runner",
+                RUNNER_PACKAGE,
                 "--features",
                 "stwo_proving",
             ])
             .env("PATH", &path_env)
             .output()
             .await
-            .wrap_err("failed to build starknet_os_runner")?;
+            .wrap_err(format!("failed to build {RUNNER_PACKAGE}"))?;
 
         pb.finish_and_clear();
 
@@ -272,17 +274,17 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             for line in stderr.lines().rev().take(30).collect::<Vec<_>>().into_iter().rev() {
                 error!("  {line}");
             }
-            bail!("starknet_os_runner build failed");
+            bail!("{RUNNER_PACKAGE} build failed");
         }
 
-        let runner_bin = sequencer_dir.join("target/release/starknet_os_runner");
+        let runner_bin = sequencer_dir.join(format!("target/release/{RUNNER_BINARY}"));
         if runner_bin.exists() {
             info!("  Binary: {}", runner_bin.display());
         } else {
-            bail!("starknet_os_runner binary not found after build");
+            bail!("{RUNNER_BINARY} binary not found after build");
         }
     } else {
-        info!("[6/7] Skipping starknet_os_runner build (--skip-runner)");
+        info!("[6/7] Skipping {RUNNER_PACKAGE} build (--skip-runner)");
     }
     info!("");
 

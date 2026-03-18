@@ -222,12 +222,10 @@ async fn run_virtual_os(
 
         let mut cmd = tokio::process::Command::new(&runner_bin);
 
-        // Pass STWO_RUN_AND_PROVE_PATH to the child process if not already set
-        if std::env::var("STWO_RUN_AND_PROVE_PATH").is_err() {
-            let prover_bin = config.prover_bin();
-            cmd.env("STWO_RUN_AND_PROVE_PATH", &prover_bin);
-        }
-        cmd.arg("--rpc-url")
+        // Run from the sequencer directory so resource files (prover_params.json etc.) are found
+        let sequencer_dir = config.deps_dir.join("sequencer");
+        cmd.current_dir(&sequencer_dir)
+            .arg("--rpc-url")
             .arg(rpc_url)
             .arg("--chain-id")
             .arg("SN_INTEGRATION_SEPOLIA")
@@ -235,8 +233,7 @@ async fn run_virtual_os(
             .arg(port.to_string())
             .arg("--ip")
             .arg("127.0.0.1")
-            .arg("--prefetch-state")
-            .arg("false");
+            .arg("--skip-fee-field-validation");
 
         if let Some(strk_token) = strk_fee_token {
             cmd.arg("--strk-fee-token-address").arg(strk_token);

@@ -6,15 +6,16 @@ on:
   workflow_dispatch: {}   # Allow manual triggers
 
 jobs:
-  health-check:
+  e2e-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchains
         uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install nightly-2025-07-14
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4
@@ -43,15 +44,29 @@ jobs:
         with:
           scarb-version: "2.15.2"
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Verify tools
         run: |
           ./snip36 --help
           sncast --version
           scarb --version
+          python3 --version
 
-      - name: Run health check
+      - name: Setup deps (clone, build prover + runner)
         env:
           STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
-        run: ./snip36 health
+        run: ./snip36 setup
+
+      - name: Run E2E test
+        env:
+          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+          STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
+          STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
+          STARKNET_GATEWAY_URL: ${{ secrets.STARKNET_GATEWAY_URL }}
+        run: ./snip36 e2e

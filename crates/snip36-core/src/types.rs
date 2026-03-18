@@ -35,8 +35,17 @@ impl Default for ResourceBounds {
     }
 }
 
-/// Resource bounds used by the playground web UI (lower l2_gas).
 impl ResourceBounds {
+    /// Resource bounds for virtual OS proving: enough gas for execution, zero price (no fee).
+    pub fn zero_fee() -> Self {
+        Self {
+            l1_gas: ResourceBound { max_amount: 0, max_price_per_unit: 0 },
+            l2_gas: ResourceBound { max_amount: 0x7000000, max_price_per_unit: 0 },
+            l1_data_gas: ResourceBound { max_amount: 0x1b0, max_price_per_unit: 0 },
+        }
+    }
+
+    /// Resource bounds used by the playground web UI (lower l2_gas).
     pub fn playground() -> Self {
         Self {
             l1_gas: ResourceBound {

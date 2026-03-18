@@ -92,10 +92,10 @@ impl Config {
         self.deps_dir.join("bin/stwo-run-and-prove")
     }
 
-    /// Path to the starknet_os_runner binary.
+    /// Path to the starknet_transaction_prover binary.
     pub fn runner_bin(&self) -> PathBuf {
         self.deps_dir
-            .join("sequencer/target/release/starknet_os_runner")
+            .join("sequencer/target/release/starknet_transaction_prover")
     }
 
     /// Path to the bootloader program JSON.
