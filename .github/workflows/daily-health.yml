@@ -5,6 +5,12 @@ on:
     - cron: '0 8 * * *'  # Daily at 08:00 UTC
   workflow_dispatch: {}   # Allow manual triggers
 
+# Version pins — bump these to force a rebuild of cached deps.
+env:
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.1
+  PROVING_UTILS_REV: 6f12ca27
+  STWO_NIGHTLY: nightly-2025-07-14
+
 jobs:
   e2e-test:
     runs-on: ubuntu-latest
@@ -15,7 +21,7 @@ jobs:
 
       - name: Install Rust toolchains
         uses: dtolnay/rust-toolchain@stable
-      - run: rustup toolchain install nightly-2025-07-14
+      - run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4
@@ -56,11 +62,19 @@ jobs:
           scarb --version
           python3 --version
 
+      # Cache the heavy deps: sequencer clone + built binaries + proving-utils + venv.
+      # Cache key includes the version pins so it rebuilds when they change.
+      - name: Cache prebuilt deps
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            sequencer_venv
+          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}
+
       - name: Setup deps (clone, build prover + runner)
-        env:
-          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
-          STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: ./snip36 setup
 
       - name: Run E2E test
