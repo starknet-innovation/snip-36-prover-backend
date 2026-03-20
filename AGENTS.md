@@ -15,7 +15,7 @@ The project is a Rust workspace with three crates:
 - `crates/snip36-server/` — Axum web backend (replaces FastAPI) for the proving playground
 - `extractor/` — Rust crate that extracts the compiled virtual OS program (excluded from default workspace, requires `deps/sequencer/`)
 - `web/frontend/` — React + TypeScript playground UI (unchanged)
-- `tests/contracts/` — Cairo counter contract for E2E tests
+- `tests/contracts/` — Cairo test contracts (Counter + Messenger) for E2E tests
 - `scripts/` — Shell scripts for external binary orchestration (setup, prove, run-virtual-os)
 - `sample-input/` — Template inputs for the prover and bootloader
 - `deps/` — (generated, gitignored) Cloned repos: `proving-utils`, `sequencer`
@@ -54,6 +54,7 @@ snip36 health
 snip36 health --quick
 snip36 setup
 snip36 e2e
+snip36 e2e-messages          # E2E test for L2→L1 messages (messenger contract)
 ```
 
 ## Web Playground
@@ -72,6 +73,7 @@ cd web/frontend && npm install && npm run dev
 cargo test --workspace           # Unit tests
 snip36 health                    # Integration health check (needs RPC)
 snip36 e2e                       # Full E2E: execute → prove → sign → submit
+snip36 e2e-messages              # E2E for L2→L1 messages: deploy Messenger → prove → verify raw_messages.json
 ```
 
 ## Environment
@@ -84,6 +86,8 @@ snip36 e2e                       # Full E2E: execute → prove → sign → subm
 
 - PIE files: `.pie.zip` — Cairo Program Independent Execution artifacts
 - Proof files: `.proof` — stwo proofs as base64 strings
+- Proof facts: `.proof_facts` — JSON array of hex felt strings identifying the proven execution
+- L2→L1 messages: `.raw_messages.json` — saved when the virtual tx emits messages (only data channel from virtual tx to real tx)
 - The `proof_facts` field in INVOKE_TXN_V3 must be included in Poseidon tx hash computation (non-standard — see `crates/snip36-core/src/signing.rs`)
 
 ## Common Pitfalls

@@ -22,7 +22,7 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 │     ┌──────────────┐   ┌──────────────┐   ┌─────────────────┐  │
 │     │ Virtual OS   │──>│ stwo-run-    │──>│ Proof (base64)  │  │
 │     │ Execution    │   │ and-prove    │   │ + proof_facts   │  │
-│     │ (RPC state)  │   │ (stwo prover)│   │                 │  │
+│     │ (RPC state)  │   │ (stwo prover)│   │ + L2→L1 msgs    │  │
 │     └──────────────┘   └──────────────┘   └────────┬────────┘  │
 │                                                     │           │
 │  3. Submit (snip36 submit)                          │           │
@@ -89,7 +89,8 @@ snip36 deploy counter      # Declare and deploy a counter contract
 snip36 fund                # Transfer STRK from master account
 snip36 health              # Run CI health checks
 snip36 setup               # Install all external dependencies
-snip36 e2e                 # Full end-to-end test
+snip36 e2e                 # Full end-to-end test (counter contract)
+snip36 e2e-messages        # E2E test for L2→L1 messages (messenger contract)
 snip36 extract             # Extract virtual OS program
 ```
 
@@ -159,6 +160,34 @@ SNIP-36:   poseidon(INVOKE, version, sender, tip_rb_hash, paymaster_hash,
 
 See `crates/snip36-core/src/signing.rs` for the canonical Rust implementation.
 
+## Output Artifacts
+
+After proving, the pipeline generates these files alongside the proof:
+
+| File | Description | When generated |
+|------|-------------|----------------|
+| `*.proof` | Base64-encoded stwo proof | Always |
+| `*.proof_facts` | JSON array of hex field elements (proof identity) | Always |
+| `*.raw_messages.json` | L2→L1 messages emitted by the virtual transaction | Only when messages exist |
+
+### L2→L1 Messages (`raw_messages.json`)
+
+When the virtual transaction emits L2→L1 messages (via `send_message_to_l1_syscall`), the prover returns them alongside the proof. These are saved to `raw_messages.json`:
+
+```json
+{
+  "l2_to_l1_messages": [
+    {
+      "from_address": "0x153...",
+      "payload": ["0x1", "0x2", "0x3"],
+      "to_address": "0x123"
+    }
+  ]
+}
+```
+
+This is the only channel to transfer data from the virtual transaction to the real verification transaction. The `e2e-messages` test verifies this flow end-to-end using a Messenger contract that calls `send_message_to_l1_syscall`.
+
 ## Project Structure
 
 ```
@@ -173,7 +202,7 @@ snip-36-prover-backend/
 │   ├── setup.sh                     # Environment setup
 │   └── run-virtual-os.sh            # Execute virtual OS + prove
 ├── tests/
-│   ├── contracts/                   # Cairo counter contract
+│   ├── contracts/                   # Cairo test contracts (Counter + Messenger)
 │   └── *.sh / *.py                  # Legacy test scripts (kept for reference)
 ├── web/
 │   └── frontend/                    # React + TypeScript playground UI

@@ -73,3 +73,27 @@ The virtual OS produces `proof_facts` — a JSON array of hex felt strings that 
 ```
 
 These are included in the transaction hash computation (Poseidon hash chain) and submitted alongside the proof to the gateway.
+
+## L2→L1 Messages (`raw_messages.json`)
+
+When the virtual transaction emits L2→L1 messages (via `send_message_to_l1_syscall`), the prover returns them in the `l2_to_l1_messages` field. The CLI saves these to a `*.raw_messages.json` file alongside the proof:
+
+```json
+{
+  "l2_to_l1_messages": [
+    {
+      "from_address": "0x6ff654...",
+      "payload": ["0x1", "0x2", "0x3"],
+      "to_address": "0x123"
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `from_address` | Contract address that emitted the message |
+| `to_address` | L1 destination address |
+| `payload` | Array of hex felt strings |
+
+This file is only generated when at least one L2→L1 message is present. It is the only mechanism to transfer data from the virtual transaction to the real verification transaction.
