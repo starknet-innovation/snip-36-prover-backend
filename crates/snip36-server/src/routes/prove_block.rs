@@ -364,6 +364,16 @@ pub async fn prove_block(
         )
         .await;
 
+        // Check for L2→L1 messages
+        let messages_file = proof_path.with_extension("raw_messages.json");
+        if messages_file.exists() {
+            send(
+                "log",
+                &format!("L2→L1 messages saved: {}", messages_file.display()),
+            )
+            .await;
+        }
+
         // ── Phase 3: Submit to gateway ──────────────────────
         send("phase", "submitting").await;
 

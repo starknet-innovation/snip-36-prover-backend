@@ -423,9 +423,13 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         // --- If prove-only, log saved paths and skip submission ---
         if args.prove_only {
             let proof_facts_file = proof_path.with_extension("proof_facts");
+            let messages_file = proof_path.with_extension("raw_messages.json");
             info!("  --prove-only: skipping gateway submission");
             info!("  Proof:       {}", proof_path.display());
             info!("  Proof facts: {}", proof_facts_file.display());
+            if messages_file.exists() {
+                info!("  Messages:    {}", messages_file.display());
+            }
             pass("Proof and proof_facts saved locally");
             continue;
         }

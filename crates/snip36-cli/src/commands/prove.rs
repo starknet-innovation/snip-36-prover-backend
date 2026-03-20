@@ -334,9 +334,28 @@ async fn run_virtual_os(
         tokio::fs::write(&facts_output, facts.to_string()).await?;
     }
 
+    // Save L2→L1 messages if present
+    let messages_output = output.with_extension("raw_messages.json");
+    if let Some(messages) = result.get("l2_to_l1_messages") {
+        if let Some(arr) = messages.as_array() {
+            if !arr.is_empty() {
+                let messages_json = serde_json::json!({ "l2_to_l1_messages": messages });
+                tokio::fs::write(
+                    &messages_output,
+                    serde_json::to_string_pretty(&messages_json)?,
+                )
+                .await?;
+                info!("  L2→L1 messages: {} message(s) saved", arr.len());
+            }
+        }
+    }
+
     info!("=== Virtual OS execution complete ===");
     info!("  Proof:       {}", output.display());
     info!("  Proof facts: {}", facts_output.display());
+    if messages_output.exists() {
+        info!("  Messages:    {}", messages_output.display());
+    }
 
     if output.exists() {
         let metadata = tokio::fs::metadata(output).await?;
