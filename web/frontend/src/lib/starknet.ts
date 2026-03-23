@@ -12,16 +12,16 @@ import { ec, hash, encode, stark, shortString } from "starknet";
 
 // ── Constants ───────────────────────────────────────────
 
-/** OZ Account class hash on integration sepolia. */
+/** OZ Account class hash on sepolia. */
 const OZ_ACCOUNT_CLASS_HASH =
   "0x05b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564";
 
 /**
- * Chain ID for SN_INTEGRATION_SEPOLIA.
+ * Chain ID for SN_SEPOLIA.
  * Not a built-in starknet.js constant — encode manually.
  */
-export const SN_INTEGRATION_SEPOLIA_CHAIN_ID =
-  shortString.encodeShortString("SN_INTEGRATION_SEPOLIA");
+export const SN_SEPOLIA_CHAIN_ID =
+  shortString.encodeShortString("SN_SEPOLIA");
 
 /**
  * Resource bounds for playground transactions.
@@ -99,7 +99,7 @@ export function computeInvokeV3TxHash(params: InvokeV3TxHashParams): string {
     senderAddress: params.senderAddress,
     version: "0x3",
     compiledCalldata: params.calldata,
-    chainId: SN_INTEGRATION_SEPOLIA_CHAIN_ID as any,
+    chainId: SN_SEPOLIA_CHAIN_ID as any,
     nonce: "0x" + params.nonce.toString(16),
     accountDeploymentData: [],
     nonceDataAvailabilityMode: "0x0" as any, // L1

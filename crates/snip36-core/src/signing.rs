@@ -17,7 +17,7 @@ fn invoke_prefix() -> Felt {
     Felt::from_bytes_be_slice(b"invoke")
 }
 
-/// Encode a chain ID string (e.g. "SN_INTEGRATION_SEPOLIA") as a felt.
+/// Encode a chain ID string (e.g. "SN_SEPOLIA") as a felt.
 pub fn chain_id_felt(chain_id: &str) -> Felt {
     Felt::from_bytes_be_slice(chain_id.as_bytes())
 }
@@ -156,7 +156,7 @@ pub fn sign(private_key: Felt, message_hash: Felt) -> Result<Signature, SignErro
     Ok(Signature { r: sig.r, s: sig.s })
 }
 
-/// Compute the SNIP-36 tx hash, sign it, and return the full gateway payload.
+/// Compute the SNIP-36 tx hash, sign it, and return the RPC invoke transaction payload.
 pub fn sign_and_build_payload(
     params: &crate::types::SubmitParams,
 ) -> Result<(Felt, serde_json::Value), SignError> {
@@ -189,12 +189,12 @@ pub fn sign_and_build_payload(
         .collect();
 
     let payload = serde_json::json!({
-        "type": "INVOKE_FUNCTION",
+        "type": "INVOKE",
         "version": "0x3",
         "sender_address": format!("{:#x}", params.sender_address),
         "calldata": calldata_hex,
         "nonce": format!("{:#x}", params.nonce),
-        "resource_bounds": params.resource_bounds.to_gateway_json(),
+        "resource_bounds": params.resource_bounds.to_rpc_json(),
         "tip": "0x0",
         "paymaster_data": [],
         "account_deployment_data": [],
@@ -240,10 +240,10 @@ mod tests {
 
     #[test]
     fn test_chain_id_encoding() {
-        let cid = chain_id_felt("SN_INTEGRATION_SEPOLIA");
-        // Should match Python: int.from_bytes(b"SN_INTEGRATION_SEPOLIA", "big")
+        let cid = chain_id_felt("SN_SEPOLIA");
+        // Should match Python: int.from_bytes(b"SN_SEPOLIA", "big")
         let expected = Felt::from_hex(
-            "0x534e5f494e544547524154494f4e5f5345504f4c4941",
+            "0x534e5f5345504f4c4941",
         )
         .unwrap();
         assert_eq!(cid, expected);
@@ -254,7 +254,7 @@ mod tests {
         // Ensure the hash chain produces a deterministic result with empty proof_facts.
         let sender = Felt::from_hex("0x123").unwrap();
         let calldata = vec![Felt::ONE];
-        let chain_id = chain_id_felt("SN_INTEGRATION_SEPOLIA");
+        let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
         let bounds = ResourceBounds::default();
 
@@ -271,7 +271,7 @@ mod tests {
     fn test_tx_hash_with_proof_facts_differs() {
         let sender = Felt::from_hex("0x123").unwrap();
         let calldata = vec![Felt::ONE];
-        let chain_id = chain_id_felt("SN_INTEGRATION_SEPOLIA");
+        let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
         let bounds = ResourceBounds::default();
 

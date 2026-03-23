@@ -81,23 +81,6 @@ impl ResourceBounds {
         })
     }
 
-    /// Format for the gateway `resource_bounds` field (uppercase keys).
-    pub fn to_gateway_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "L1_GAS": {
-                "max_amount": format!("{:#x}", self.l1_gas.max_amount),
-                "max_price_per_unit": format!("{:#x}", self.l1_gas.max_price_per_unit),
-            },
-            "L2_GAS": {
-                "max_amount": format!("{:#x}", self.l2_gas.max_amount),
-                "max_price_per_unit": format!("{:#x}", self.l2_gas.max_price_per_unit),
-            },
-            "L1_DATA_GAS": {
-                "max_amount": format!("{:#x}", self.l1_data_gas.max_amount),
-                "max_price_per_unit": format!("{:#x}", self.l1_data_gas.max_price_per_unit),
-            },
-        })
-    }
 }
 
 /// Proof data returned by the prover.
@@ -109,7 +92,7 @@ pub struct ProofOutput {
     pub proof_facts: Vec<String>,
 }
 
-/// Parameters for a SNIP-36 proof submission to the gateway.
+/// Parameters for a SNIP-36 proof submission via RPC.
 #[derive(Debug, Clone)]
 pub struct SubmitParams {
     pub sender_address: Felt,
@@ -120,7 +103,6 @@ pub struct SubmitParams {
     pub nonce: Felt,
     pub chain_id: Felt,
     pub resource_bounds: ResourceBounds,
-    pub gateway_url: String,
 }
 
 /// Session state for the playground web UI.
@@ -142,11 +124,11 @@ pub struct Session {
 
 // Well-known constants
 
-/// STRK token address on integration sepolia.
+/// STRK token address on sepolia.
 pub const STRK_TOKEN: &str =
-    "0x70a5da4f557b77a9c54546e4bcc900806e28793d8e3eaaa207428d2387249b7";
+    "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 
-/// OpenZeppelin Account class hash on integration sepolia.
+/// OpenZeppelin Account class hash on sepolia.
 pub const OZ_ACCOUNT_CLASS_HASH: &str =
     "0x05b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564";
 
@@ -170,5 +152,3 @@ pub const SEND_MESSAGE_SELECTOR: &str =
 pub const PLAY_SELECTOR: &str =
     "0x21c4a0db2b08b026c4e31bf76d5dd9b92aa54c0978df57474355786073775e8";
 
-/// Default gateway URL for SNIP-36 proof submission.
-pub const DEFAULT_GATEWAY_URL: &str = "https://privacy-starknet-integration.starknet.io";

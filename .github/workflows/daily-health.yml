@@ -1,4 +1,4 @@
-name: Daily Integration Health Check
+name: Daily Sepolia Health Check
 
 on:
   schedule:

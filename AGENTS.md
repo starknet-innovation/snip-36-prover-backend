@@ -72,7 +72,7 @@ cd web/frontend && npm install && npm run dev
 
 ```bash
 cargo test --workspace           # Unit tests
-snip36 health                    # Integration health check (needs RPC)
+snip36 health                    # Sepolia health check (needs RPC)
 snip36 e2e                       # Full E2E: execute → prove → sign → submit
 snip36 e2e-messages              # E2E for L2→L1 messages: deploy Messenger → prove → verify raw_messages.json
 snip36 e2e-coinflip              # Provable coin flip: deploy CoinFlip → prove → verify settlement message
@@ -82,7 +82,7 @@ snip36 e2e-coinflip              # Provable coin flip: deploy CoinFlip → prove
 
 - `.env` contains secrets (RPC URL, private key) — never commit
 - `.env.example` shows required variables
-- Target network: Starknet Integration Sepolia
+- Target network: Starknet Sepolia
 
 ## Working with Proofs
 

@@ -27,8 +27,8 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 │                                                     │           │
 │  3. Submit (snip36 submit)                          │           │
 │     ┌──────────────┐   ┌──────────────┐   ┌────────▼────────┐  │
-│     │ Compute tx   │──>│ ECDSA sign   │──>│ Gateway         │  │
-│     │ hash (with   │   │ (private key)│   │ add_transaction │  │
+│     │ Compute tx   │──>│ ECDSA sign   │──>│ RPC             │  │
+│     │ hash (with   │   │ (private key)│   │ addInvokeTx     │  │
 │     │ proof_facts) │   │              │   │                 │  │
 │     └──────────────┘   └──────────────┘   └─────────────────┘  │
 │                                                                 │
@@ -83,7 +83,7 @@ snip36 e2e
 snip36 prove virtual-os   # Run virtual OS + stwo prover for a transaction
 snip36 prove program       # Prove a compiled Cairo program directly
 snip36 prove pie           # Prove a Cairo PIE via bootloader
-snip36 submit              # Sign and submit proof to gateway
+snip36 submit              # Sign and submit proof via RPC
 snip36 deploy account      # Deploy an OZ account contract
 snip36 deploy counter      # Declare and deploy a counter contract
 snip36 fund                # Transfer STRK from master account
@@ -148,7 +148,7 @@ snip36 submit \
 
 ## Transaction Hash with proof_facts
 
-The privacy gateway extends the standard Starknet v3 invoke transaction hash:
+SNIP-36 extends the standard Starknet v3 invoke transaction hash:
 
 ```
 Standard:  poseidon(INVOKE, version, sender, tip_rb_hash, paymaster_hash,

@@ -155,7 +155,7 @@ else
     echo "Starting starknet_os_runner on port $RUNNER_PORT..."
     "$RUNNER_BIN" \
         --rpc-url "$RPC_URL" \
-        --chain-id SN_INTEGRATION_SEPOLIA \
+        --chain-id SN_SEPOLIA \
         --port "$RUNNER_PORT" \
         --ip 127.0.0.1 \
         --prefetch-state false \

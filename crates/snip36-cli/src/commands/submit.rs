@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use color_eyre::eyre::{bail, Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr};
 use starknet_types_core::felt::Felt;
 use tracing::info;
 
@@ -87,62 +87,22 @@ pub async fn run(args: SubmitArgs, env_file: Option<&std::path::Path>) -> Result
         nonce: Felt::from(nonce),
         chain_id,
         resource_bounds,
-        gateway_url: config.gateway_url.clone(),
     };
 
     // Sign and build payload
-    let (tx_hash, payload) =
+    let (tx_hash, invoke_tx) =
         sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
 
     info!("  Tx hash (with proof_facts): {:#x}", tx_hash);
-
-    // Submit to gateway
-    let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
-    info!("Submitting INVOKE_FUNCTION with proof...");
+    info!("Submitting INVOKE with proof via RPC...");
     info!("  Sender:  {}", config.account_address);
     info!("  Nonce:   {:#x}", nonce);
-    info!("  Gateway: {submit_url}");
+    info!("  RPC:     {}", config.rpc_url);
 
-    let payload_str = serde_json::to_string(&payload)?;
-    info!("  Payload: {} bytes", payload_str.len());
+    // Submit via starknet_addInvokeTransaction
+    let rpc_tx_hash = rpc.add_invoke_transaction(invoke_tx).await?;
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&submit_url)
-        .header("Content-Type", "application/json")
-        .body(payload_str)
-        .timeout(std::time::Duration::from_secs(120))
-        .send()
-        .await
-        .wrap_err("gateway request failed")?;
-
-    let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .wrap_err("failed to parse gateway response")?;
-
-    info!("Response:");
-    info!("{}", serde_json::to_string_pretty(&body)?);
-
-    if !status.is_success() {
-        bail!("HTTP {status}: {body}");
-    }
-
-    let code = body
-        .get("code")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if code == "TRANSACTION_RECEIVED" {
-        let gw_tx_hash = body
-            .get("transaction_hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        info!("SUCCESS: tx_hash = {gw_tx_hash}");
-    } else {
-        bail!("submission failed: code={code}");
-    }
+    info!("SUCCESS: tx_hash = {rpc_tx_hash}");
 
     Ok(())
 }

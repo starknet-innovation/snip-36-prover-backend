@@ -72,7 +72,7 @@ The virtual OS produces `proof_facts` — a JSON array of hex felt strings that 
 ]
 ```
 
-These are included in the transaction hash computation (Poseidon hash chain) and submitted alongside the proof to the gateway.
+These are included in the transaction hash computation (Poseidon hash chain) and submitted alongside the proof via RPC.
 
 ## L2→L1 Messages (`raw_messages.json`)
 

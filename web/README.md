@@ -12,7 +12,7 @@ Walks through the full SNIP-36 flow step by step:
 4. **Deploy** a Counter contract
 5. **Invoke** `increment(1)` — tx hash computed and signed entirely in-browser
 6. **Prove** the transaction using virtual OS + stwo prover (streamed logs)
-7. **Submit** a proof-bearing transaction to the gateway
+7. **Submit** a proof-bearing transaction via RPC
 
 Each step includes an explainer toggle with educational context.
 
@@ -48,7 +48,7 @@ Two different hash computations are used:
 | Step | Hash | Resource Bounds |
 |------|------|-----------------|
 | Step 5 (normal invoke via RPC) | Standard SNIP-8 | L1_GAS + L2_GAS |
-| Step 7 (proof tx via gateway) | SNIP-36 extended | L1_GAS + L2_GAS + L1_DATA + proof_facts |
+| Step 7 (proof tx via RPC) | SNIP-36 extended | L1_GAS + L2_GAS + L1_DATA + proof_facts |
 
 Step 5 uses starknet.js's built-in `calculateInvokeTransactionHash`. Step 7 uses `snip36-core::signing` in the Rust backend.
 
@@ -58,4 +58,4 @@ Step 5 uses starknet.js's built-in `calculateInvokeTransactionHash`. Step 7 uses
 - Node.js 18+
 - `sncast` (from starknet-foundry)
 - The prover tooling set up via `snip36 setup`
-- A funded account on Starknet Integration Sepolia (configure in `.env`)
+- A funded account on Starknet Sepolia (configure in `.env`)

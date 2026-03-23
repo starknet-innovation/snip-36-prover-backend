@@ -228,7 +228,7 @@ async fn run_virtual_os(
             .arg("--rpc-url")
             .arg(rpc_url)
             .arg("--chain-id")
-            .arg("SN_INTEGRATION_SEPOLIA")
+            .arg("SN_SEPOLIA")
             .arg("--port")
             .arg(port.to_string())
             .arg("--ip")

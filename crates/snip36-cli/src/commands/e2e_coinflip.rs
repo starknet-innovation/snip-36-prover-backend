@@ -497,14 +497,14 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     // --- If prove-only, skip submission ---
     if args.prove_only {
         let proof_facts_file = proof_path.with_extension("proof_facts");
-        info!("  --prove-only: skipping gateway submission");
+        info!("  --prove-only: skipping RPC submission");
         info!("  Proof:       {}", proof_path.display());
         info!("  Proof facts: {}", proof_facts_file.display());
         info!("  Messages:    {}", messages_file.display());
         pass("All artifacts saved locally");
     } else {
-        // --- Submit to gateway ---
-        step(7, "Submit to gateway");
+        // --- Submit via RPC ---
+        step(7, "Submit via RPC");
 
         let proof_b64 = tokio::fs::read_to_string(&proof_path).await?;
         if proof_b64.trim().is_empty() {
@@ -533,58 +533,38 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
             nonce: nonce_felt,
             chain_id,
             resource_bounds: ResourceBounds::default(),
-            gateway_url: config.gateway_url.clone(),
         };
 
-        let (tx_hash, payload) =
+        let (tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
 
-        let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
-        info!("  Submitting tx {:#x} to gateway...", tx_hash);
+        info!("  Submitting tx {:#x} via RPC...", tx_hash);
 
-        let client = reqwest::Client::new();
         let max_attempts = 20;
         let mut accepted = false;
 
         for attempt in 1..=max_attempts {
-            let response = client
-                .post(&submit_url)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(120))
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
-
-                    if code == "TRANSACTION_RECEIVED" {
-                        pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
-                        accepted = true;
-                        break;
-                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
-                        && attempt < max_attempts
-                    {
-                        info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    } else {
-                        info!("  Response: {}", serde_json::to_string_pretty(&body)?);
-                        fail(&format!("Gateway rejected: code={code}"));
-                        break;
-                    }
+            match rpc.add_invoke_transaction(invoke_tx.clone()).await {
+                Ok(_rpc_tx_hash) => {
+                    pass(&format!("RPC accepted (attempt {attempt}/{max_attempts})"));
+                    accepted = true;
+                    break;
+                }
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg))
+                    if attempt < max_attempts =>
+                {
+                    info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
                 Err(e) => {
-                    fail(&format!("Gateway request failed: {e}"));
+                    fail(&format!("RPC submission failed: {e}"));
                     break;
                 }
             }
         }
 
         if !accepted {
-            bail!("gateway submission failed");
+            bail!("RPC submission failed");
         }
 
         let tx_hash_hex = format!("{:#x}", tx_hash);

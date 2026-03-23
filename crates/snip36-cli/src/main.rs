@@ -29,7 +29,7 @@ struct Cli {
 enum Commands {
     /// Run virtual OS + stwo prover
     Prove(commands::prove::ProveArgs),
-    /// Sign and submit proof to gateway
+    /// Sign and submit proof via RPC
     Submit(commands::submit::SubmitArgs),
     /// Deploy contracts via sncast
     Deploy(commands::deploy::DeployArgs),

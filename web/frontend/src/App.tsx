@@ -233,7 +233,7 @@ export default function App() {
       case "proving":
         return "Proving in virtual OS...";
       case "submitting":
-        return "Submitting to gateway...";
+        return "Submitting via RPC...";
       case "verifying":
         return "Waiting for on-chain confirmation...";
       default:
@@ -259,7 +259,7 @@ export default function App() {
       </h1>
       <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
         Deploy a counter, then prove state transitions off-chain and submit them
-        to the privacy gateway.
+        via RPC.
       </p>
 
       <CounterDisplay
@@ -397,7 +397,7 @@ export default function App() {
       >
         <p style={descStyle}>
           Construct a transaction <strong>off-chain</strong>, prove it in the
-          virtual OS with stwo, and submit the proof to the privacy gateway. The
+          virtual OS with stwo, and submit the proof via RPC. The
           counter updates on-chain without a standard invoke.
         </p>
 
@@ -540,7 +540,7 @@ export default function App() {
           <p>
             <strong>3. Submit:</strong> A proof-bearing transaction (with{" "}
             <code>proof_facts</code>) is signed and submitted to the privacy
-            gateway, which verifies the proof and forwards it to Starknet.
+            Starknet node, which verifies the proof on-chain.
           </p>
           <p>
             <strong>4. Verify:</strong> Once included on-chain, the counter

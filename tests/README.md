@@ -1,6 +1,6 @@
 # SNIP-36 E2E Test Suite
 
-End-to-end test that validates the full SNIP-36 virtual block pipeline against the Starknet Integration Sepolia test environment. All tooling is implemented in Rust via the `snip36` CLI.
+End-to-end test that validates the full SNIP-36 virtual block pipeline against the Starknet Sepolia test environment. All tooling is implemented in Rust via the `snip36` CLI.
 
 ## Test Flow
 
@@ -11,7 +11,7 @@ End-to-end test that validates the full SNIP-36 virtual block pipeline against t
 4. For each SNOS block:
    a. Construct and sign an invoke transaction (increment)
    b. Prove via virtual OS (starknet_os_runner + stwo prover)
-   c. Sign tx with proof_facts-inclusive hash and submit to gateway
+   c. Sign tx with proof_facts-inclusive hash and submit via RPC
    d. Wait for tx inclusion, verify counter state on-chain
 5. Final counter verification
 ```
@@ -30,8 +30,7 @@ End-to-end test that validates the full SNIP-36 virtual block pipeline against t
 | `STARKNET_RPC_URL` | (see .env) | Yes |
 | `STARKNET_ACCOUNT_ADDRESS` | — | Yes |
 | `STARKNET_PRIVATE_KEY` | — | Yes |
-| `STARKNET_CHAIN_ID` | `SN_INTEGRATION_SEPOLIA` | No |
-| `STARKNET_GATEWAY_URL` | `https://privacy-starknet-integration.starknet.io` | No |
+| `STARKNET_CHAIN_ID` | `SN_SEPOLIA` | No |
 | `PROVER_URL` | — | No (uses local runner if unset) |
 
 ## Running
@@ -60,7 +59,7 @@ The E2E orchestrator and all supporting logic (tx signing, proof submission, tx 
 |-------|-------------|
 | `crates/snip36-cli/src/commands/e2e.rs` | E2E test orchestrator |
 | `crates/snip36-cli/src/commands/prove.rs` | Virtual OS proving (`snip36 prove virtual-os`) |
-| `crates/snip36-cli/src/commands/submit.rs` | Sign + submit proof to gateway (`snip36 submit`) |
+| `crates/snip36-cli/src/commands/submit.rs` | Sign + submit proof via RPC (`snip36 submit`) |
 | `crates/snip36-core/src/signing.rs` | Proof_facts-inclusive Poseidon tx hash + signing |
 | `crates/snip36-core/src/rpc.rs` | Starknet RPC client (tx polling, calls) |
 
@@ -69,7 +68,7 @@ The E2E orchestrator and all supporting logic (tx signing, proof submission, tx 
 ```
 snip36 e2e          Full end-to-end test
 snip36 prove        Run virtual OS + stwo prover
-snip36 submit       Sign and submit proof to gateway
+snip36 submit       Sign and submit proof via RPC
 snip36 deploy       Deploy contracts via sncast
 snip36 fund         Transfer STRK from master account
 snip36 extract      Extract virtual OS program
@@ -109,4 +108,4 @@ The `snip36` CLI handles this natively via `snip36_core::signing`, which compute
 
 ## CI
 
-A daily health check runs via GitHub Actions (`.github/workflows/daily-health.yml`), executing `snip36 health` to verify the integration environment is operational.
+A daily health check runs via GitHub Actions (`.github/workflows/daily-health.yml`), executing `snip36 health` to verify the sepolia environment is operational.
