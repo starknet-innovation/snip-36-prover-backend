@@ -13,7 +13,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::receipt_block_number;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, INCREMENT_SELECTOR, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 
@@ -103,9 +105,7 @@ pub async fn prove_block(
             let event = event.to_string();
             let data = data.to_string();
             async move {
-                let _ = tx
-                    .send(Ok(Event::default().event(event).data(data)))
-                    .await;
+                let _ = tx.send(Ok(Event::default().event(event).data(data))).await;
             }
         };
 
@@ -119,8 +119,7 @@ pub async fn prove_block(
             }
         };
 
-        let expected_increment =
-            increment_amount * increments_per_block as u64;
+        let expected_increment = increment_amount * increments_per_block as u64;
 
         send(
             "log",
@@ -135,8 +134,7 @@ pub async fn prove_block(
         send("phase", "constructing").await;
 
         // Build multicall calldata
-        let mut calldata_strs: Vec<String> =
-            vec![format!("{:#x}", increments_per_block)];
+        let mut calldata_strs: Vec<String> = vec![format!("{:#x}", increments_per_block)];
         for _ in 0..increments_per_block {
             calldata_strs.push(contract_address.clone());
             calldata_strs.push(INCREMENT_SELECTOR.to_string());
@@ -191,7 +189,11 @@ pub async fn prove_block(
         {
             Ok(n) => n,
             Err(e) => {
-                send("error", &format!("Failed to get nonce at block {reference_block}: {e}")).await;
+                send(
+                    "error",
+                    &format!("Failed to get nonce at block {reference_block}: {e}"),
+                )
+                .await;
                 return;
             }
         };
@@ -250,9 +252,7 @@ pub async fn prove_block(
 
         send(
             "log",
-            &format!(
-                "Transaction constructed (nonce: {nonce}, ref block: {reference_block})"
-            ),
+            &format!("Transaction constructed (nonce: {nonce}, ref block: {reference_block})"),
         )
         .await;
 
@@ -301,10 +301,7 @@ pub async fn prove_block(
             Err(e) => {
                 send(
                     "error",
-                    &format!(
-                        "Failed to spawn prover ({}): {e}",
-                        snip36_bin.display()
-                    ),
+                    &format!("Failed to spawn prover ({}): {e}", snip36_bin.display()),
                 )
                 .await;
                 return;
@@ -358,11 +355,7 @@ pub async fn prove_block(
             .await
             .map(|m| m.len())
             .unwrap_or(0);
-        send(
-            "log",
-            &format!("Proof generated ({} bytes)", proof_size),
-        )
-        .await;
+        send("log", &format!("Proof generated ({} bytes)", proof_size)).await;
 
         // Check for L2→L1 messages
         let messages_file = proof_path.with_extension("raw_messages.json");
@@ -425,7 +418,7 @@ pub async fn prove_block(
             resource_bounds: ResourceBounds::default(),
         };
 
-        let (gw_tx_hash, invoke_tx) = match sign_and_build_payload(&params) {
+        let (local_tx_hash, invoke_tx) = match sign_and_build_payload(&params) {
             Ok(r) => r,
             Err(e) => {
                 send("error", &format!("SNIP-36 signing failed: {e}")).await;
@@ -433,31 +426,34 @@ pub async fn prove_block(
             }
         };
 
-        let gw_tx_hash_hex = format!("{:#x}", gw_tx_hash);
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
         send(
             "log",
-            &format!("Submitting tx {} via RPC...", gw_tx_hash_hex.get(..18).unwrap_or(&gw_tx_hash_hex)),
+            &format!(
+                "Submitting tx {} via RPC...",
+                local_tx_hash_hex.get(..18).unwrap_or(&local_tx_hash_hex)
+            ),
         )
         .await;
 
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut rpc_tx_hash = None;
 
         for attempt in 1..=max_attempts {
             match state.rpc.add_invoke_transaction(invoke_tx.clone()).await {
-                Ok(_rpc_tx_hash) => {
+                Ok(accepted_tx_hash) => {
                     send(
                         "log",
-                        &format!("RPC accepted (attempt {attempt}/{max_attempts})"),
+                        &format!(
+                            "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                        ),
                     )
                     .await;
-                    accepted = true;
+                    rpc_tx_hash = Some(accepted_tx_hash);
                     break;
                 }
-                Err(snip36_core::rpc::RpcError::JsonRpc(msg))
-                    if attempt < max_attempts =>
-                {
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
                     send(
                         "log",
                         &format!(
@@ -474,16 +470,16 @@ pub async fn prove_block(
             }
         }
 
-        if !accepted {
+        let Some(rpc_tx_hash) = rpc_tx_hash else {
             send("error", "RPC did not accept after all retries").await;
             return;
-        }
+        };
 
         // ── Phase 4: Wait for inclusion and verify ──────────
         send("phase", "verifying").await;
         send("log", "Waiting for tx inclusion...").await;
 
-        match state.rpc.wait_for_tx(&gw_tx_hash_hex, 180, 5).await {
+        match state.rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = receipt_block_number(&receipt).unwrap_or(0);
                 send("log", &format!("Tx included in block {bn}")).await;
@@ -516,16 +512,12 @@ pub async fn prove_block(
             Err(_) => 0,
         };
 
-        send(
-            "log",
-            &format!("Counter value: {counter_value}"),
-        )
-        .await;
+        send("log", &format!("Counter value: {counter_value}")).await;
 
         send_json(
             "complete",
             serde_json::json!({
-                "tx_hash": gw_tx_hash_hex,
+                "tx_hash": rpc_tx_hash,
                 "counter_value": counter_value,
                 "proof_size": proof_size,
                 "increment": expected_increment,

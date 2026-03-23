@@ -24,6 +24,8 @@ pub struct SubmitProofRequest {
 pub struct SubmitProofResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_tx_hash: Option<String>,
     pub output: String,
 }
 
@@ -106,9 +108,10 @@ pub async fn submit_proof(
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     let private_key = felt_from_hex(&state.config.private_key)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-    let chain_id = state.config.chain_id_felt().map_err(|e| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
-    })?;
+    let chain_id = state
+        .config
+        .chain_id_felt()
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Get nonce for the master account
     let nonce = state
@@ -128,11 +131,11 @@ pub async fn submit_proof(
         resource_bounds: ResourceBounds::playground(),
     };
 
-    let (tx_hash, invoke_tx) = sign_and_build_payload(&params)
+    let (local_tx_hash, invoke_tx) = sign_and_build_payload(&params)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let tx_hash_hex = format!("{:#x}", tx_hash);
-    info!(tx_hash = %tx_hash_hex, "Submitting proof via RPC");
+    let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
+    info!(local_tx_hash = %local_tx_hash_hex, "Submitting proof via RPC");
 
     // Submit via starknet_addInvokeTransaction
     let rpc_tx_hash = state
@@ -146,10 +149,15 @@ pub async fn submit_proof(
             )
         })?;
 
-    info!(tx_hash = %rpc_tx_hash, "RPC accepted transaction");
+    info!(
+        local_tx_hash = %local_tx_hash_hex,
+        rpc_tx_hash = %rpc_tx_hash,
+        "RPC accepted transaction"
+    );
 
     Ok(Json(SubmitProofResponse {
-        tx_hash: Some(tx_hash_hex),
+        tx_hash: Some(rpc_tx_hash.clone()),
+        local_tx_hash: Some(local_tx_hash_hex),
         output: format!("{{\"transaction_hash\":\"{rpc_tx_hash}\"}}"),
     }))
 }

@@ -9,7 +9,9 @@ use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, GET_COUNTER_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -104,8 +106,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // Reset counters
     PASS_COUNT.store(0, Ordering::Relaxed);
     FAIL_COUNT.store(0, Ordering::Relaxed);
-    if let Ok(mut t) = STEP_TIMINGS.lock() { t.clear(); }
-    if let Ok(mut s) = STEP_START.lock() { *s = None; }
+    if let Ok(mut t) = STEP_TIMINGS.lock() {
+        t.clear();
+    }
+    if let Ok(mut s) = STEP_START.lock() {
+        *s = None;
+    }
     let e2e_start = Instant::now();
 
     let rpc = StarknetRpc::new(&config.rpc_url);
@@ -118,8 +124,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
-    info!("  Blocks:  {} × {} calls × increment({}) = +{} total",
-        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected);
+    info!(
+        "  Blocks:  {} × {} calls × increment({}) = +{} total",
+        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected
+    );
     info!("");
 
     // Check prerequisites
@@ -176,7 +184,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         pass("Contract compiled");
     } else {
         let out = format_cmd_output(&build);
-        fail(&format!("Contract compilation failed: {}", &out[..out.len().min(500)]));
+        fail(&format!(
+            "Contract compilation failed: {}",
+            &out[..out.len().min(500)]
+        ));
         bail!("compilation failed");
     }
 
@@ -289,8 +300,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // Proving loop: construct, prove, submit, verify for each block
     // ==========================================
 
-    let increment_selector =
-        "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
+    let increment_selector = "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
 
     // Build multicall calldata (reused for every block)
     let calldata: Vec<String> = {
@@ -377,7 +387,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         let tx_path = args.output_dir.join(format!("e2e_tx_{block_idx}.json"));
         tokio::fs::write(&tx_path, serde_json::to_string_pretty(&tx_json)?).await?;
 
-        info!("  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}", standard_tx_hash);
+        info!(
+            "  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}",
+            standard_tx_hash
+        );
         pass("Transaction constructed and signed");
 
         // --- Prove in virtual OS ---
@@ -463,26 +476,27 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             resource_bounds: ResourceBounds::default(),
         };
 
-        let (tx_hash, invoke_tx) =
+        let (local_tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
-        info!("  Submitting tx {:#x} via RPC...", tx_hash);
+        info!("  Submitting tx {local_tx_hash_hex} via RPC...");
         info!("  Proof block: {reference_block}");
 
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut rpc_tx_hash = None;
         let fails_before = FAIL_COUNT.load(Ordering::Relaxed);
 
         for attempt in 1..=max_attempts {
             match rpc.add_invoke_transaction(invoke_tx.clone()).await {
-                Ok(_rpc_tx_hash) => {
-                    pass(&format!("RPC accepted (attempt {attempt}/{max_attempts})"));
-                    accepted = true;
+                Ok(accepted_tx_hash) => {
+                    pass(&format!(
+                        "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                    ));
+                    rpc_tx_hash = Some(accepted_tx_hash);
                     break;
                 }
-                Err(snip36_core::rpc::RpcError::JsonRpc(msg))
-                    if attempt < max_attempts =>
-                {
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
                     info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
@@ -493,18 +507,17 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             }
         }
 
-        if !accepted {
+        let Some(rpc_tx_hash) = rpc_tx_hash else {
             if FAIL_COUNT.load(Ordering::Relaxed) == fails_before {
                 fail("RPC did not accept after all retries");
             }
             bail!("RPC submission failed for block {block_idx}");
-        }
+        };
 
         // --- Wait for tx inclusion and verify counter ---
-        let tx_hash_hex = format!("{:#x}", tx_hash);
-        info!("  Waiting for tx {tx_hash_hex} to be included...");
+        info!("  Waiting for tx {rpc_tx_hash} to be included...");
 
-        match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
+        match rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 info!("  Tx included in block {bn}");
@@ -524,7 +537,9 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                 pass(&format!("Counter verified: {actual} (expected {expected})"));
             }
             Some(actual) => {
-                fail(&format!("Counter mismatch: got {actual}, expected {expected}"));
+                fail(&format!(
+                    "Counter mismatch: got {actual}, expected {expected}"
+                ));
                 bail!("counter verification failed for block {block_idx}");
             }
             None => {

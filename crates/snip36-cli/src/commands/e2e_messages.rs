@@ -9,7 +9,9 @@ use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, SEND_MESSAGE_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -98,8 +100,12 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
     PASS_COUNT.store(0, Ordering::Relaxed);
     FAIL_COUNT.store(0, Ordering::Relaxed);
-    if let Ok(mut t) = STEP_TIMINGS.lock() { t.clear(); }
-    if let Ok(mut s) = STEP_START.lock() { *s = None; }
+    if let Ok(mut t) = STEP_TIMINGS.lock() {
+        t.clear();
+    }
+    if let Ok(mut s) = STEP_START.lock() {
+        *s = None;
+    }
     let e2e_start = Instant::now();
 
     let rpc = StarknetRpc::new(&config.rpc_url);
@@ -129,11 +135,18 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
     let _ = tokio::process::Command::new("sncast")
         .args([
-            "account", "import", "--name", account_name,
-            "--address", &config.account_address,
-            "--private-key", &config.private_key,
-            "--type", "oz",
-            "--url", &config.rpc_url,
+            "account",
+            "import",
+            "--name",
+            account_name,
+            "--address",
+            &config.account_address,
+            "--private-key",
+            &config.private_key,
+            "--type",
+            "oz",
+            "--url",
+            &config.rpc_url,
             "--silent",
         ])
         .output()
@@ -164,7 +177,10 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         pass("Contract compiled");
     } else {
         let out = format_cmd_output(&build);
-        fail(&format!("Compilation failed: {}", &out[..out.len().min(500)]));
+        fail(&format!(
+            "Compilation failed: {}",
+            &out[..out.len().min(500)]
+        ));
         bail!("compilation failed");
     }
 
@@ -200,9 +216,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     } else {
         let declare_output = tokio::process::Command::new("sncast")
             .args([
-                "--account", account_name,
-                "declare", "--url", &config.rpc_url,
-                "--contract-name", "Messenger",
+                "--account",
+                account_name,
+                "declare",
+                "--url",
+                &config.rpc_url,
+                "--contract-name",
+                "Messenger",
             ])
             .current_dir(&contracts_dir)
             .output()
@@ -237,10 +257,15 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
     let deploy_output = tokio::process::Command::new("sncast")
         .args([
-            "--account", account_name,
-            "deploy", "--url", &config.rpc_url,
-            "--class-hash", &class_hash,
-            "--salt", &salt,
+            "--account",
+            account_name,
+            "deploy",
+            "--url",
+            &config.rpc_url,
+            "--class-hash",
+            &class_hash,
+            "--salt",
+            &salt,
         ])
         .output()
         .await
@@ -340,8 +365,8 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         &[], // no proof_facts for VOS validation
     );
 
-    let sig = sign(private_key_felt, standard_tx_hash)
-        .map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+    let sig =
+        sign(private_key_felt, standard_tx_hash).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
 
     let tx_json = serde_json::json!({
         "type": "INVOKE",
@@ -361,7 +386,10 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     let tx_path = args.output_dir.join("msg_tx.json");
     tokio::fs::write(&tx_path, serde_json::to_string_pretty(&tx_json)?).await?;
 
-    info!("  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}", standard_tx_hash);
+    info!(
+        "  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}",
+        standard_tx_hash
+    );
     pass("Transaction constructed and signed");
 
     // --- Prove in virtual OS ---
@@ -420,8 +448,8 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     let messages_str = tokio::fs::read_to_string(&messages_file)
         .await
         .wrap_err("failed to read raw_messages.json")?;
-    let messages_json: serde_json::Value = serde_json::from_str(&messages_str)
-        .wrap_err("invalid JSON in raw_messages.json")?;
+    let messages_json: serde_json::Value =
+        serde_json::from_str(&messages_str).wrap_err("invalid JSON in raw_messages.json")?;
 
     let l2_to_l1 = messages_json
         .get("l2_to_l1_messages")
@@ -431,8 +459,14 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         Some(msgs) if !msgs.is_empty() => {
             info!("  Found {} L2→L1 message(s):", msgs.len());
             for (i, msg) in msgs.iter().enumerate() {
-                let from = msg.get("from_address").and_then(|v| v.as_str()).unwrap_or("?");
-                let to = msg.get("to_address").and_then(|v| v.as_str()).unwrap_or("?");
+                let from = msg
+                    .get("from_address")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let to = msg
+                    .get("to_address")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
                 let payload = msg.get("payload").and_then(|v| v.as_array());
                 let payload_len = payload.map(|p| p.len()).unwrap_or(0);
                 info!("  [{i}] from={from} to={to} payload_len={payload_len}");
@@ -440,7 +474,10 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
             // Verify the message matches what we sent
             let first_msg = &msgs[0];
-            let msg_to = first_msg.get("to_address").and_then(|v| v.as_str()).unwrap_or("");
+            let msg_to = first_msg
+                .get("to_address")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let msg_payload = first_msg.get("payload").and_then(|v| v.as_array());
 
             // to_address should match
@@ -519,24 +556,25 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             resource_bounds: ResourceBounds::default(),
         };
 
-        let (tx_hash, invoke_tx) =
+        let (local_tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
-        info!("  Submitting tx {:#x} via RPC...", tx_hash);
+        info!("  Submitting tx {local_tx_hash_hex} via RPC...");
 
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut rpc_tx_hash = None;
 
         for attempt in 1..=max_attempts {
             match rpc.add_invoke_transaction(invoke_tx.clone()).await {
-                Ok(_rpc_tx_hash) => {
-                    pass(&format!("RPC accepted (attempt {attempt}/{max_attempts})"));
-                    accepted = true;
+                Ok(accepted_tx_hash) => {
+                    pass(&format!(
+                        "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                    ));
+                    rpc_tx_hash = Some(accepted_tx_hash);
                     break;
                 }
-                Err(snip36_core::rpc::RpcError::JsonRpc(msg))
-                    if attempt < max_attempts =>
-                {
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
                     info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
@@ -547,15 +585,14 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             }
         }
 
-        if !accepted {
+        let Some(rpc_tx_hash) = rpc_tx_hash else {
             bail!("RPC submission failed");
-        }
+        };
 
         // Wait for tx inclusion
-        let tx_hash_hex = format!("{:#x}", tx_hash);
-        info!("  Waiting for tx {tx_hash_hex} to be included...");
+        info!("  Waiting for tx {rpc_tx_hash} to be included...");
 
-        match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
+        match rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 pass(&format!("Tx included in block {bn}"));
