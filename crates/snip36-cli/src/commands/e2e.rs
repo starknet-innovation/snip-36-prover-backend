@@ -218,10 +218,19 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let class_hash = parse_hex_from_output("class_hash", &declare_combined)
         .or_else(|| parse_long_hex(&declare_combined));
 
+    let declare_tx_hash = parse_hex_from_output("transaction_hash", &declare_combined);
+
     let class_hash = match class_hash {
         Some(h) => {
             pass("Contract declared");
             info!("  Class hash: {h}");
+            // Wait for declare tx to land before deploying
+            if let Some(tx) = &declare_tx_hash {
+                info!("  Waiting for declare tx inclusion...");
+                rpc.wait_for_tx(tx, 120, 3)
+                    .await
+                    .wrap_err("declare tx not confirmed")?;
+            }
             h
         }
         None => {
