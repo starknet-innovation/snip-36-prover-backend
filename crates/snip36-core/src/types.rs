@@ -20,8 +20,8 @@ impl Default for ResourceBounds {
     fn default() -> Self {
         Self {
             l1_gas: ResourceBound {
-                max_amount: 0x0,
-                max_price_per_unit: 0xe8d4a51000,
+                max_amount: 0x10000,
+                max_price_per_unit: 0x3a3529440000, // ~64T — covers sepolia gas spikes
             },
             l2_gas: ResourceBound {
                 max_amount: 0x7000000,
@@ -29,7 +29,7 @@ impl Default for ResourceBounds {
             },
             l1_data_gas: ResourceBound {
                 max_amount: 0x1b0,
-                max_price_per_unit: 0x5dc,
+                max_price_per_unit: 0x100000, // ~1M — covers sepolia data gas spikes
             },
         }
     }

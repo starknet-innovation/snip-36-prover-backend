@@ -238,6 +238,11 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
         match class_hash {
             Some(h) => {
+                // Wait for declare tx to be included before deploying
+                if let Some(tx) = parse_hex_from_output("transaction_hash", &declare_combined) {
+                    info!("  Waiting for declare tx {tx}...");
+                    let _ = rpc.wait_for_tx(&tx, 120, 3).await;
+                }
                 pass("Messenger declared");
                 info!("  Class hash: {h}");
                 h
@@ -560,33 +565,89 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
         let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
-        info!("  Submitting tx {local_tx_hash_hex} via RPC...");
-
         let max_attempts = 20;
         let mut rpc_tx_hash = None;
+        let client = reqwest::Client::new();
 
-        for attempt in 1..=max_attempts {
-            match rpc.add_invoke_transaction(invoke_tx.clone()).await {
-                Ok(accepted_tx_hash) => {
-                    pass(&format!(
-                        "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
-                    ));
-                    rpc_tx_hash = Some(accepted_tx_hash);
-                    break;
+        if let Some(ref gw_url) = config.gateway_url {
+            let submit_url = format!("{}/gateway/add_transaction", gw_url.trim_end_matches('/'));
+            info!("  Submitting tx {local_tx_hash_hex} via gateway...");
+
+            let mut gw_tx = invoke_tx.clone();
+            gw_tx["type"] = serde_json::json!("INVOKE_FUNCTION");
+            if let Some(rb) = gw_tx.get("resource_bounds").cloned() {
+                let mut upper = serde_json::Map::new();
+                for (k, v) in rb.as_object().into_iter().flatten() {
+                    upper.insert(k.to_uppercase(), v.clone());
                 }
-                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
-                    info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                gw_tx["resource_bounds"] = serde_json::Value::Object(upper);
+            }
+
+            for attempt in 1..=max_attempts {
+                let response = client
+                    .post(&submit_url)
+                    .header("Content-Type", "application/json")
+                    .json(&gw_tx)
+                    .timeout(std::time::Duration::from_secs(120))
+                    .send()
+                    .await;
+
+                match response {
+                    Ok(resp) => {
+                        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                        let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                        let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+
+                        if code == "TRANSACTION_RECEIVED" {
+                            pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
+                            rpc_tx_hash = Some(local_tx_hash_hex.clone());
+                            break;
+                        } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                            && attempt < max_attempts
+                        {
+                            info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        } else {
+                            fail(&format!("Gateway rejected: {body}"));
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        if attempt < max_attempts {
+                            info!("  Attempt {attempt}/{max_attempts}: request failed ({e}), retrying...");
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        } else {
+                            fail(&format!("Gateway request failed: {e}"));
+                        }
+                    }
                 }
-                Err(e) => {
-                    fail(&format!("RPC submission failed: {e}"));
-                    break;
+            }
+        } else {
+            info!("  Submitting tx {local_tx_hash_hex} via RPC...");
+
+            for attempt in 1..=max_attempts {
+                match rpc.add_invoke_transaction(invoke_tx.clone()).await {
+                    Ok(accepted_tx_hash) => {
+                        pass(&format!(
+                            "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                        ));
+                        rpc_tx_hash = Some(accepted_tx_hash);
+                        break;
+                    }
+                    Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
+                        info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    }
+                    Err(e) => {
+                        fail(&format!("RPC submission failed: {e}"));
+                        break;
+                    }
                 }
             }
         }
 
         let Some(rpc_tx_hash) = rpc_tx_hash else {
-            bail!("RPC submission failed");
+            bail!("Submission failed");
         };
 
         // Wait for tx inclusion

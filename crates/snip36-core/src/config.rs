@@ -11,6 +11,8 @@ pub struct Config {
     pub private_key: String,
     /// Starknet chain ID string (e.g. "SN_SEPOLIA").
     pub chain_id: String,
+    /// Gateway URL for proof submission (bypasses RPC node).
+    pub gateway_url: Option<String>,
     /// Project root directory.
     pub project_dir: PathBuf,
     /// Output directory for proofs and artifacts.
@@ -42,6 +44,9 @@ impl Config {
             .map_err(|_| ConfigError::Missing("STARKNET_PRIVATE_KEY"))?;
         let chain_id =
             std::env::var("STARKNET_CHAIN_ID").unwrap_or_else(|_| "SN_SEPOLIA".into());
+        let gateway_url = std::env::var("STARKNET_GATEWAY_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
 
         let project_dir = std::env::var("SNIP36_PROJECT_DIR")
             .map(PathBuf::from)
@@ -56,6 +61,7 @@ impl Config {
             account_address,
             private_key,
             chain_id,
+            gateway_url,
             project_dir,
             output_dir,
             deps_dir,
