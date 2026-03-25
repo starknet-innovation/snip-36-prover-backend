@@ -82,4 +82,5 @@ jobs:
           STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
+          STARKNET_GATEWAY_URL: ${{ secrets.STARKNET_GATEWAY_URL }}
         run: ./snip36 e2e

@@ -62,8 +62,14 @@ This clones the sequencer and proving-utils repos, installs the nightly Rust too
 
 ```bash
 cp .env.example .env
-# Edit .env with your account address, private key, and RPC URL
+# Edit .env with your account address, private key, RPC URL, and gateway URL
 ```
+
+Required variables:
+- `STARKNET_RPC_URL` — JSON-RPC endpoint (e.g. Alchemy)
+- `STARKNET_ACCOUNT_ADDRESS` — Sender account (hex)
+- `STARKNET_PRIVATE_KEY` — Signing key (hex)
+- `STARKNET_GATEWAY_URL` — Sequencer gateway for proof submission (e.g. `https://alpha-sepolia.starknet.io`). Required because RPC nodes (pathfinder) don't yet support compressed proofs.
 
 ### 4. Run health check
 
@@ -167,7 +173,7 @@ After proving, the pipeline generates these files alongside the proof:
 
 | File | Description | When generated |
 |------|-------------|----------------|
-| `*.proof` | Base64-encoded stwo proof | Always |
+| `*.proof` | Base64-encoded stwo proof (zstd-compressed) | Always |
 | `*.proof_facts` | JSON array of hex field elements (proof identity) | Always |
 | `*.raw_messages.json` | L2→L1 messages emitted by the virtual transaction | Only when messages exist |
 
@@ -246,9 +252,9 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `APOLLO-PRE-PROOF-DEMO-19` — Virtual OS runner
-- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) — stwo-run-and-prove binary
-- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) v2.1.0 — Circle STARK prover
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.2` — Virtual OS runner (zstd-compressed proofs)
+- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `dbc39e7` — stwo-run-and-prove binary
+- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) — Circle STARK prover
 - [starknet-crypto](https://crates.io/crates/starknet-crypto) — Poseidon hash, ECDSA signing
 
 ## License
