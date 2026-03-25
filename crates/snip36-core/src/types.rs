@@ -16,15 +16,15 @@ pub struct ResourceBounds {
     pub l1_data_gas: ResourceBound,
 }
 
-/// ~64 trillion wei — safe ceiling for Sepolia L1/data gas price spikes.
-const SEPOLIA_GAS_PRICE_CEIL: u128 = 0x3a3529440000;
+/// ~1 quadrillion wei — safe ceiling for Sepolia gas price spikes.
+const SEPOLIA_GAS_PRICE_CEIL: u128 = 0x38d7ea4c68000;
 
 impl Default for ResourceBounds {
     fn default() -> Self {
         Self {
             l1_gas: ResourceBound {
                 max_amount: 0x10000,
-                max_price_per_unit: 0x3a3529440000, // ~64T — covers sepolia gas spikes
+                max_price_per_unit: SEPOLIA_GAS_PRICE_CEIL,
             },
             l2_gas: ResourceBound {
                 max_amount: 0x7000000,
