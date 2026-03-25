@@ -1,3 +1,4 @@
+pub mod coinflip;
 pub mod deploy;
 pub mod fund;
 pub mod invoke;
@@ -29,4 +30,12 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/api/submit-proof", post(submit::submit_proof))
         .route("/api/read-counter", post(read::read_counter))
         .route("/api/nonce/{address}", get(read::get_nonce))
+        // CoinFlip routes
+        .route("/api/coinflip/status", get(coinflip::coinflip_status))
+        .route("/api/coinflip/deploy", post(coinflip::deploy_coinflip))
+        .route("/api/coinflip/commit", post(coinflip::commit_bet))
+        .route(
+            "/api/coinflip/play/{session_id}",
+            get(coinflip::play_coinflip),
+        )
 }

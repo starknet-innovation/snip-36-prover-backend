@@ -43,7 +43,7 @@ fn default_one_u32() -> u32 {
 /// Search order: SNIP36_CLI_BIN env, sibling of current exe (covers both
 /// `cargo run` and installed layouts since both workspace binaries land in
 /// the same target/{debug,release} directory), then PATH fallback.
-fn find_snip36_bin() -> PathBuf {
+pub fn find_snip36_bin() -> PathBuf {
     if let Ok(bin) = std::env::var("SNIP36_CLI_BIN") {
         return PathBuf::from(bin);
     }
