@@ -189,7 +189,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     } else {
         fail(&format!(
             "Could not import account into sncast: {}",
-            &import_combined[..import_combined.len().min(500)]
+            import_combined.get(..500).unwrap_or(&import_combined)
         ));
         bail!("cannot proceed without sncast account");
     }
@@ -370,7 +370,9 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let client = reqwest::Client::new();
     let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));
     // Read initial counter value
-    let _ = rpc.wait_for_block_after(deploy_block, 120, 3).await;
+    if let Err(e) = rpc.wait_for_block_after(deploy_block, 120, 3).await {
+        tracing::warn!("Could not confirm block after deploy (continuing): {e}");
+    }
     let initial_counter = read_counter(&rpc, &contract_address).await.unwrap_or(0);
     info!("  Initial counter: {initial_counter}");
 
@@ -629,7 +631,9 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 info!("  Tx included in block {bn}");
                 reference_block = bn;
-                let _ = rpc.wait_for_block_after(bn, 120, 3).await;
+                if let Err(e) = rpc.wait_for_block_after(bn, 120, 3).await {
+                    tracing::warn!("Could not confirm block after tx inclusion (continuing): {e}");
+                }
             }
             Err(e) => {
                 fail(&format!("Tx not confirmed: {e}"));
