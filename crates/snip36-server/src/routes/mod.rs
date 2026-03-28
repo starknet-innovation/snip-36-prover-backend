@@ -38,4 +38,20 @@ pub fn api_router() -> Router<Arc<AppState>> {
             "/api/coinflip/play/{session_id}",
             get(coinflip::play_coinflip),
         )
+        // CoinFlipBank routes
+        .route("/api/coinflip/bank/status", get(coinflip::bank_status))
+        .route("/api/coinflip/bank/deploy", post(coinflip::deploy_bank))
+        .route("/api/coinflip/deposit-info", post(coinflip::deposit_info))
+        .route(
+            "/api/coinflip/confirm-deposit",
+            post(coinflip::confirm_deposit),
+        )
+        .route(
+            "/api/coinflip/balance/{address}",
+            get(coinflip::player_balance),
+        )
+        .route(
+            "/api/coinflip/winnings/{address}",
+            get(coinflip::player_winnings),
+        )
 }
