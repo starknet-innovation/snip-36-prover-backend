@@ -1,0 +1,132 @@
+name: Build & Release Pre-built Dependencies
+
+# Builds stwo-run-and-prove, starknet_os_runner, and bootloader_program.json
+# for macOS (arm64) and Linux (x86_64), then uploads them as a GitHub Release.
+#
+# Trigger: push a tag like `deps-v1` or run manually.
+
+on:
+  push:
+    tags:
+      - 'deps-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag name (e.g. deps-v1)'
+        required: true
+        default: 'deps-v1'
+
+env:
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.2
+  PROVING_UTILS_REV: main
+  STWO_NIGHTLY: nightly-2025-07-14
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-deps-cargo-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build snip36 CLI
+        run: cargo build --release -p snip36-cli
+
+      - name: Run setup (builds prover + runner)
+        run: ./target/release/snip36 setup
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp deps/bin/stwo-run-and-prove dist/
+          cp deps/bin/bootloader_program.json dist/
+          # starknet_os_runner is built under sequencer target dir
+          if [ -f deps/sequencer/target/release/starknet_os_runner ]; then
+            cp deps/sequencer/target/release/starknet_os_runner dist/
+          elif [ -f deps/sequencer/target/release/starknet_transaction_prover ]; then
+            cp deps/sequencer/target/release/starknet_transaction_prover dist/starknet_os_runner
+          fi
+          ls -lh dist/
+          tar czf snip36-deps-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snip36-deps-${{ matrix.target }}
+          path: snip36-deps-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Pre-built dependencies (${{ steps.tag.outputs.tag }})"
+          body: |
+            Pre-built binaries for SNIP-36 prover dependencies.
+
+            **Contents:**
+            - `stwo-run-and-prove` — Circle STARK prover
+            - `starknet_os_runner` — Virtual OS executor
+            - `bootloader_program.json` — Bootloader program
+
+            **Versions:**
+            - sequencer: `${{ env.SEQUENCER_TAG }}`
+            - proving-utils: `${{ env.PROVING_UTILS_REV }}`
+            - Rust nightly: `${{ env.STWO_NIGHTLY }}`
+
+            **Usage:**
+            ```bash
+            # Download for your platform
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/snip36-deps-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/aarch64/arm64/').tar.gz | tar xz -C deps/bin/
+            mkdir -p deps/sequencer/target/release
+            mv deps/bin/starknet_os_runner deps/sequencer/target/release/
+            ```
+          files: |
+            artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
+            artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
+          fail_on_unmatched_files: false
+          generate_release_notes: false
