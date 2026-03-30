@@ -47,6 +47,8 @@ enum Commands {
     E2eMessages(commands::e2e_messages::E2eMessagesArgs),
     /// E2E coin flip example (provable off-chain game)
     E2eCoinflip(commands::e2e_coinflip::E2eCoinflipArgs),
+    /// E2E settlement test (full deposit → prove → settle → payout)
+    E2eSettlement(commands::e2e_settlement::E2eSettlementArgs),
 }
 
 #[tokio::main]
@@ -80,5 +82,6 @@ async fn main() -> Result<()> {
         Commands::E2e(args) => commands::e2e::run(args, env_file).await,
         Commands::E2eMessages(args) => commands::e2e_messages::run(args, env_file).await,
         Commands::E2eCoinflip(args) => commands::e2e_coinflip::run(args, env_file).await,
+        Commands::E2eSettlement(args) => commands::e2e_settlement::run(args, env_file).await,
     }
 }

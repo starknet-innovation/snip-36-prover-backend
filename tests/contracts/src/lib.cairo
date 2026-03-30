@@ -77,7 +77,7 @@ trait ICoinFlipBank<TContractState> {
     /// Owner (server) calls: matches the player's deposit with bank funds.
     fn match_deposit(ref self: TContractState, session_id: felt252);
     /// Owner calls after SNIP-36 proof: settles based on deterministic outcome.
-    fn settle(ref self: TContractState, session_id: felt252);
+    fn settle(ref self: TContractState, session_id: felt252, seed: felt252);
     /// Player calls to withdraw accumulated winnings.
     fn withdraw(ref self: TContractState);
     /// View: get game state (player_felt, bet_amount, seed, bet, state).
@@ -167,14 +167,13 @@ mod CoinFlipBank {
             self.game_state.write(session_id, STATE_MATCHED);
         }
 
-        fn settle(ref self: ContractState, session_id: felt252) {
+        fn settle(ref self: ContractState, session_id: felt252, seed: felt252) {
             let caller = get_caller_address();
             assert(caller == self.owner.read(), 'Only owner');
             assert(self.game_state.read(session_id) == STATE_MATCHED, 'Not matched');
 
             let player = self.game_player.read(session_id);
             let amount = self.game_amount.read(session_id);
-            let seed = self.game_seed.read(session_id);
             let bet = self.game_bet.read(session_id);
 
             // Deterministic outcome — same logic as CoinFlip.play()
@@ -188,16 +187,16 @@ mod CoinFlipBank {
             };
 
             let payout = amount * 2;
+            let strk = IERC20Dispatcher {
+                contract_address: STRK_TOKEN.try_into().unwrap(),
+            };
 
             if outcome == bet {
-                // Player wins: credit their withdrawable balance
-                let current = self.player_balance.read(player);
-                self.player_balance.write(player, current + payout);
+                // Player wins: transfer 2x directly to player wallet
+                strk.transfer(player, payout);
             } else {
-                // Bank wins: credit owner's withdrawable balance
-                let owner = self.owner.read();
-                let current = self.player_balance.read(owner);
-                self.player_balance.write(owner, current + payout);
+                // Bank wins: transfer 2x back to owner
+                strk.transfer(self.owner.read(), payout);
             }
 
             self.game_state.write(session_id, STATE_SETTLED);

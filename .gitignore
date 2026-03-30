@@ -33,3 +33,4 @@ dist/
 
 # Scarb build artifacts
 tests/contracts/target/
+.DS_Store

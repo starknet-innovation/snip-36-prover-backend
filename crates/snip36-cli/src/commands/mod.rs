@@ -2,6 +2,7 @@ pub mod deploy;
 pub mod e2e;
 pub mod e2e_coinflip;
 pub mod e2e_messages;
+pub mod e2e_settlement;
 pub mod extract;
 pub mod fund;
 pub mod health;

@@ -759,15 +759,17 @@ pub async fn play_coinflip(
             send("log", "Settling on-chain...").await;
 
             let session_felt = format!("0x{}", session_id.replace('-', ""));
+            let settle_calldata = format!("{} {}", session_felt, seed);
 
-            match sncast_invoke(&state, &bank_address, "settle", &session_felt).await {
-                Ok((_output, Some(tx))) => {
-                    send("log", &format!("Settlement tx: {}", tx.get(..18).unwrap_or(&tx))).await;
-                    send("log", "Settlement confirmed").await;
-                    settle_tx_hash_hex = tx;
-                }
-                Ok((_output, None)) => {
-                    send("log", "Settlement: no tx hash in output").await;
+            match sncast_invoke(&state, &bank_address, "settle", &settle_calldata).await {
+                Ok(result) => {
+                    if let Some(tx) = result.tx_hash {
+                        send("log", &format!("Settlement tx: {}", tx.get(..18).unwrap_or(&tx))).await;
+                        send("log", "Settlement confirmed").await;
+                        settle_tx_hash_hex = tx;
+                    } else {
+                        send("log", "Settlement: no tx hash in output").await;
+                    }
                 }
                 Err(e) => {
                     send("log", &format!("Settlement failed (non-critical): {e}")).await;
@@ -802,19 +804,38 @@ pub struct BankStatusResponse {
     pub deployed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_balance: Option<String>,
 }
 
 /// GET /api/coinflip/bank/status
 pub async fn bank_status(State(state): State<Arc<AppState>>) -> Json<BankStatusResponse> {
     let lock = state.bank.read().await;
     match lock.as_ref() {
-        Some(d) => Json(BankStatusResponse {
-            deployed: true,
-            contract_address: Some(d.contract_address.clone()),
-        }),
+        Some(d) => {
+            // Read the bank contract's STRK balance
+            let balance_of_selector = "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e";
+            let bank_balance = state
+                .rpc
+                .starknet_call(STRK_TOKEN, balance_of_selector, &[&d.contract_address])
+                .await
+                .ok()
+                .and_then(|r| r.first().cloned())
+                .and_then(|low| {
+                    let wei = u128::from_str_radix(low.trim_start_matches("0x"), 16).ok()?;
+                    Some(format!("{:.4}", wei as f64 / 1e18))
+                });
+
+            Json(BankStatusResponse {
+                deployed: true,
+                contract_address: Some(d.contract_address.clone()),
+                bank_balance,
+            })
+        }
         None => Json(BankStatusResponse {
             deployed: false,
             contract_address: None,
+            bank_balance: None,
         }),
     }
 }
@@ -923,21 +944,17 @@ pub async fn deploy_bank(
     let max_approval = "0xffffffffffffffffffffffffffffffff";
     let approve_calldata = format!("{} {} {}", contract_address, max_approval, "0x0");
     info!("Approving STRK for CoinFlipBank...");
-    let (_approve_output, _approve_tx) = sncast_invoke(
-        &state, STRK_TOKEN, "approve", &approve_calldata,
-    )
-    .await
-    .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    let _approve = sncast_invoke(&state, STRK_TOKEN, "approve", &approve_calldata)
+        .await
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     // Pre-fund the bank: transfer 10 STRK from master to the contract
     let fund_amount: u128 = 10 * 10u128.pow(18); // 10 STRK in wei
     let fund_calldata = format!("{} {:#x} 0x0", contract_address, fund_amount);
     info!("Pre-funding bank with 10 STRK...");
-    let (_fund_output, _fund_tx) = sncast_invoke(
-        &state, STRK_TOKEN, "transfer", &fund_calldata,
-    )
-    .await
-    .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    let _fund = sncast_invoke(&state, STRK_TOKEN, "transfer", &fund_calldata)
+        .await
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     let deployment = crate::state::BankDeployment {
         contract_address: contract_address.clone(),
@@ -1061,27 +1078,27 @@ pub async fn confirm_deposit(
     drop(commitment);
 
     // Server matches the deposit (sncast_invoke holds lock + waits for confirmation)
-    let (_match_output, match_tx) = sncast_invoke(
+    let match_result = sncast_invoke(
         &state, &bank.contract_address, "match_deposit", &session_felt,
     )
     .await
     .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
-    let match_tx = match_tx.ok_or_else(|| {
+    let match_tx = match_result.tx_hash.ok_or_else(|| {
         error_response(StatusCode::INTERNAL_SERVER_ERROR, "Bank match: no tx hash in output")
     })?;
 
-    // NOW lock the seed_block — after match_deposit is confirmed.
-    // Wait for one more block so the nonce at seed_block includes match_deposit.
-    let current_block = state.rpc.block_number().await.unwrap_or(0);
-    let _ = state.rpc.wait_for_block_after(current_block, 60, 3).await;
-    let new_block = state.rpc.block_number().await.unwrap_or(current_block + 1);
+    // Use the block where match_deposit was confirmed as seed_block.
+    // The nonce at this block includes match_deposit — no extra block wait needed.
+    let confirmed_block = match match_result.block_number {
+        Some(bn) => bn,
+        None => state.rpc.block_number().await.unwrap_or(0),
+    };
     let deploy_block = {
         let lock = state.coinflip.read().await;
         lock.as_ref().map(|d| d.deploy_block).unwrap_or(0)
     };
-    // Use new_block - 1 as seed; match_deposit is guaranteed to be included
-    let seed_block = new_block.saturating_sub(1).max(deploy_block);
+    let seed_block = confirmed_block.max(deploy_block);
 
     // Update the commitment with the real seed_block
     if let Some(mut entry) = state.commitments.get_mut(&req.session_id) {
@@ -1178,6 +1195,15 @@ pub async fn player_winnings(
 
 // ── Helpers ──────────────────────────────────────────────
 
+/// Result of a serialized sncast invoke.
+struct InvokeResult {
+    #[allow(dead_code)]
+    output: std::process::Output,
+    tx_hash: Option<String>,
+    /// Block number where the tx was confirmed (if available).
+    block_number: Option<u64>,
+}
+
 /// Run `sncast invoke` while holding the sncast mutex to prevent nonce races.
 /// Waits for tx confirmation before releasing the lock.
 async fn sncast_invoke(
@@ -1185,7 +1211,7 @@ async fn sncast_invoke(
     contract_address: &str,
     function: &str,
     calldata: &str,
-) -> Result<(std::process::Output, Option<String>), String> {
+) -> Result<InvokeResult, String> {
     let _lock = state.sncast_lock.lock().await;
     let account_name = state.config.sncast_account();
 
@@ -1212,11 +1238,24 @@ async fn sncast_invoke(
 
     // Wait for tx confirmation before releasing lock so next invoke sees updated nonce
     let tx_hash = parse_hex("transaction_hash", &combined);
+    let mut block_number = None;
+
     if let Some(ref tx) = tx_hash {
-        let _ = state.rpc.wait_for_tx(tx, 120, 3).await;
+        tracing::info!(tx = %tx, "sncast tx submitted, waiting for confirmation...");
+        match state.rpc.wait_for_tx(tx, 120, 3).await {
+            Ok(receipt) => {
+                block_number = receipt_block_number(&receipt);
+                tracing::info!(tx = %tx, block = ?block_number, "sncast tx confirmed");
+            }
+            Err(e) => {
+                tracing::error!(tx = %tx, error = %e, "sncast tx confirmation failed");
+            }
+        }
+    } else {
+        tracing::error!(output = %combined.chars().take(500).collect::<String>(), "sncast invoke: no tx hash in output");
     }
 
-    Ok((output, tx_hash))
+    Ok(InvokeResult { output, tx_hash, block_number })
 }
 
 fn extract_long_hex(text: &str) -> Option<String> {
