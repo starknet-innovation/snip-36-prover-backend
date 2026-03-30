@@ -3,11 +3,11 @@ name = "snip36-server"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Web backend for the SNIP-36 Proving Playground"
+description = "Generic SNIP-36 server library — reusable routes, state, and helpers"
 
-[[bin]]
-name = "snip36-server"
-path = "src/main.rs"
+[lib]
+name = "snip36_server"
+path = "src/lib.rs"
 
 [dependencies]
 snip36-core = { path = "../snip36-core" }

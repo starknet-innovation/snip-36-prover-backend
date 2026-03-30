@@ -38,17 +38,17 @@ enum Commands {
     /// Extract virtual OS program
     Extract(commands::extract::ExtractArgs),
     /// CI health check
-    Health(commands::health::HealthArgs),
+    Health(snip36_counter::health::HealthArgs),
     /// Environment setup
     Setup(commands::setup::SetupArgs),
     /// Full end-to-end test
-    E2e(commands::e2e::E2eArgs),
+    E2e(snip36_counter::e2e::E2eArgs),
     /// E2E test for L2→L1 messages (raw_messages.json)
-    E2eMessages(commands::e2e_messages::E2eMessagesArgs),
+    E2eMessages(snip36_messages::e2e::E2eMessagesArgs),
     /// E2E coin flip example (provable off-chain game)
-    E2eCoinflip(commands::e2e_coinflip::E2eCoinflipArgs),
+    E2eCoinflip(snip36_coinflip::e2e::E2eCoinflipArgs),
     /// E2E settlement test (full deposit → prove → settle → payout)
-    E2eSettlement(commands::e2e_settlement::E2eSettlementArgs),
+    E2eSettlement(snip36_coinflip::e2e_settlement::E2eSettlementArgs),
 }
 
 #[tokio::main]
@@ -77,11 +77,11 @@ async fn main() -> Result<()> {
         Commands::Deploy(args) => commands::deploy::run(args, env_file).await,
         Commands::Fund(args) => commands::fund::run(args, env_file).await,
         Commands::Extract(args) => commands::extract::run(args, env_file).await,
-        Commands::Health(args) => commands::health::run(args, env_file).await,
+        Commands::Health(args) => snip36_counter::health::run(args, env_file).await,
         Commands::Setup(args) => commands::setup::run(args, env_file).await,
-        Commands::E2e(args) => commands::e2e::run(args, env_file).await,
-        Commands::E2eMessages(args) => commands::e2e_messages::run(args, env_file).await,
-        Commands::E2eCoinflip(args) => commands::e2e_coinflip::run(args, env_file).await,
-        Commands::E2eSettlement(args) => commands::e2e_settlement::run(args, env_file).await,
+        Commands::E2e(args) => snip36_counter::e2e::run(args, env_file).await,
+        Commands::E2eMessages(args) => snip36_messages::e2e::run(args, env_file).await,
+        Commands::E2eCoinflip(args) => snip36_coinflip::e2e::run(args, env_file).await,
+        Commands::E2eSettlement(args) => snip36_coinflip::e2e_settlement::run(args, env_file).await,
     }
 }

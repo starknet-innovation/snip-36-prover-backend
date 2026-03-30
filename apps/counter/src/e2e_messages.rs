@@ -12,11 +12,17 @@ use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::selectors::SEND_MESSAGE_SELECTOR;
 use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use snip36_core::Config;
 
-use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+
+// Note: e2e_messages uses SEND_MESSAGE_SELECTOR from the Messenger contract,
+// not Counter selectors. We import it from snip36_core::selectors which still
+// exists in git HEAD (though removed from core lib.rs exports).
+// For now, define it locally to avoid depending on a removed module.
+const SEND_MESSAGE_SELECTOR: &str =
+    "0x12ead94ae9d3f9d2bdb6b847cf255f1f398193a1f88884a0ae8e18f24a037b6";
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -77,23 +83,23 @@ fn format_duration(d: std::time::Duration) -> String {
 pub struct E2eMessagesArgs {
     /// Remote prover URL (skip local starknet_os_runner)
     #[arg(long)]
-    prover_url: Option<String>,
+    pub prover_url: Option<String>,
 
     /// Output directory for E2E artifacts
     #[arg(long, default_value = "output/e2e-messages")]
-    output_dir: PathBuf,
+    pub output_dir: PathBuf,
 
-    /// Stop after proving — save proof and artifacts locally without submitting
+    /// Stop after proving -- save proof and artifacts locally without submitting
     #[arg(long)]
-    prove_only: bool,
+    pub prove_only: bool,
 
     /// L1 address to send the message to (hex)
     #[arg(long, default_value = "0x123")]
-    to_address: String,
+    pub to_address: String,
 
     /// Payload felts to send (hex, comma-separated)
     #[arg(long, default_value = "0x1,0x2,0x3")]
-    payload: String,
+    pub payload: String,
 }
 
 pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -118,7 +124,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         .map(|s| s.trim().to_string())
         .collect();
 
-    info!("=== SNIP-36 L2→L1 Messages E2E Test ===");
+    info!("=== SNIP-36 L2->L1 Messages E2E Test ===");
     info!("");
     info!("  RPC:        {}", config.rpc_url);
     info!("  Account:    {}", config.account_address);
@@ -443,11 +449,11 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     // ==========================================
     // STEP 6: Verify raw_messages.json
     // ==========================================
-    step(6, "Verify L2→L1 messages output");
+    step(6, "Verify L2->L1 messages output");
 
     let messages_file = proof_path.with_extension("raw_messages.json");
     if !messages_file.exists() {
-        fail("raw_messages.json not found — prover did not return L2→L1 messages");
+        fail("raw_messages.json not found -- prover did not return L2->L1 messages");
         bail!("missing raw_messages.json");
     }
 
@@ -463,7 +469,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
     match l2_to_l1 {
         Some(msgs) if !msgs.is_empty() => {
-            info!("  Found {} L2→L1 message(s):", msgs.len());
+            info!("  Found {} L2->L1 message(s):", msgs.len());
             for (i, msg) in msgs.iter().enumerate() {
                 let from = msg
                     .get("from_address")
@@ -676,7 +682,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
 
     info!("");
     info!("==========================================");
-    info!("  L2→L1 MESSAGES E2E SUMMARY");
+    info!("  L2->L1 MESSAGES E2E SUMMARY");
     info!("==========================================");
     info!("");
     info!("  Passed: {passed}");

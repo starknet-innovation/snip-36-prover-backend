@@ -4,6 +4,10 @@ members = [
     "crates/snip36-core",
     "crates/snip36-cli",
     "crates/snip36-server",
+    "apps/coinflip",
+    "apps/counter",
+    "apps/messages",
+    "apps/playground",
 ]
 # The extractor crate depends on deps/sequencer/ (cloned by `snip36 setup`).
 # It is excluded from the default workspace so `cargo build` works without it.

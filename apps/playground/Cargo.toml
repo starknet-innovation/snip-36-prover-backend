@@ -1,0 +1,22 @@
+[package]
+name = "snip36-playground"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Full SNIP-36 playground server — combines generic SDK routes with Counter and CoinFlip examples"
+
+[[bin]]
+name = "snip36-playground"
+path = "src/main.rs"
+
+[dependencies]
+snip36-core = { path = "../../crates/snip36-core" }
+snip36-server = { path = "../../crates/snip36-server" }
+snip36-counter = { path = "../counter" }
+snip36-coinflip = { path = "../coinflip" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+color-eyre = { workspace = true }
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors"] }
