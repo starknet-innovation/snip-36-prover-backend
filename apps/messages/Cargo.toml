@@ -9,7 +9,6 @@ description = "L2→L1 messages example application for SNIP-36"
 snip36-core = { path = "../../crates/snip36-core", features = ["cli"] }
 starknet-types-core = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
@@ -17,8 +16,4 @@ color-eyre = { workspace = true }
 eyre = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
-base64 = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-indicatif = "0.17"
-regex-lite = "0.1"
-tempfile = "3"
