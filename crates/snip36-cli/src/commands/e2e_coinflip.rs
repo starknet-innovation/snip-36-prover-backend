@@ -13,7 +13,8 @@ use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{ResourceBounds, SubmitParams, PLAY_SELECTOR, STRK_TOKEN};
+use snip36_core::selectors::PLAY_SELECTOR;
+use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use snip36_core::Config;
 
 use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};

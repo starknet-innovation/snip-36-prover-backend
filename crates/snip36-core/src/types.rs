@@ -57,24 +57,6 @@ impl ResourceBounds {
         }
     }
 
-    /// Resource bounds used by the playground web UI (lower l2_gas).
-    pub fn playground() -> Self {
-        Self {
-            l1_gas: ResourceBound {
-                max_amount: 0x0,
-                max_price_per_unit: SEPOLIA_GAS_PRICE_CEIL,
-            },
-            l2_gas: ResourceBound {
-                max_amount: 0x2000000,
-                max_price_per_unit: 0x2cb417800,
-            },
-            l1_data_gas: ResourceBound {
-                max_amount: 0x1b0,
-                max_price_per_unit: SEPOLIA_GAS_PRICE_CEIL,
-            },
-        }
-    }
-
     /// Format for the Starknet JSON-RPC `resource_bounds` field (lowercase keys).
     pub fn to_rpc_json(&self) -> serde_json::Value {
         serde_json::json!({
@@ -145,7 +127,7 @@ pub struct Session {
     pub invoke_block: Option<u64>,
     pub prove_block: Option<u64>,
     pub proof_file: Option<String>,
-    /// Block number where the counter contract was deployed.
+    /// Block number where the application contract was deployed.
     pub deploy_block: Option<u64>,
     /// Reference block for the next prove (updated after each proven tx lands).
     pub last_reference_block: Option<u64>,
@@ -160,21 +142,6 @@ pub const STRK_TOKEN: &str = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07
 pub const OZ_ACCOUNT_CLASS_HASH: &str =
     "0x05b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564";
 
-/// Selector for `increment(amount)`.
-pub const INCREMENT_SELECTOR: &str =
-    "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
-
-/// Selector for `get_counter()`.
-pub const GET_COUNTER_SELECTOR: &str =
-    "0x3370263ab53343580e77063a719a5865004caff7f367ec136a6cdd34b6786ca";
-
-/// Selector for `balance_of(account)`.
+/// ERC-20 `balance_of(account)` selector — standard across all Starknet tokens.
 pub const BALANCE_OF_SELECTOR: &str =
     "0x35a73cd311a05d46deda634c5ee045db92f811b4e74bca4437fcb5302b7af33";
-
-/// Selector for `send_message(to_address, payload)`.
-pub const SEND_MESSAGE_SELECTOR: &str =
-    "0x12ead94ae9d3f9d2bdb6b847cf255f1f398193a1f88884a0ae8e18f24a037b6";
-
-/// Selector for `play(seed, player, bet)` (CoinFlip contract).
-pub const PLAY_SELECTOR: &str = "0x21c4a0db2b08b026c4e31bf76d5dd9b92aa54c0978df57474355786073775e8";

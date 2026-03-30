@@ -13,7 +13,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::receipt_block_number;
 use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
-use snip36_core::types::{ResourceBounds, SubmitParams, PLAY_SELECTOR, STRK_TOKEN};
+use snip36_core::selectors::PLAY_SELECTOR;
+use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 use tracing::info;
 

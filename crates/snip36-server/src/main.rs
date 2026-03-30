@@ -1,3 +1,4 @@
+mod coinflip_state;
 mod routes;
 mod state;
 

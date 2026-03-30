@@ -7,7 +7,8 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use snip36_core::signing::{felt_from_hex, sign_and_build_payload};
-use snip36_core::types::{ResourceBounds, SubmitParams, INCREMENT_SELECTOR};
+use snip36_core::selectors::INCREMENT_SELECTOR;
+use snip36_core::types::SubmitParams;
 use starknet_types_core::felt::Felt;
 use tracing::info;
 
@@ -128,7 +129,7 @@ pub async fn submit_proof(
         proof_facts,
         nonce: Felt::from(nonce),
         chain_id,
-        resource_bounds: ResourceBounds::playground(),
+        resource_bounds: super::counter::playground_bounds(),
     };
 
     let (local_tx_hash, invoke_tx) = sign_and_build_payload(&params)

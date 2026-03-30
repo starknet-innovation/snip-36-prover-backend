@@ -5,9 +5,8 @@ use color_eyre::eyre::Result;
 use tracing::{error, info};
 
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::types::{
-    BALANCE_OF_SELECTOR, GET_COUNTER_SELECTOR, OZ_ACCOUNT_CLASS_HASH, STRK_TOKEN,
-};
+use snip36_core::selectors::GET_COUNTER_SELECTOR;
+use snip36_core::types::{BALANCE_OF_SELECTOR, OZ_ACCOUNT_CLASS_HASH, STRK_TOKEN};
 use snip36_core::Config;
 
 use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};

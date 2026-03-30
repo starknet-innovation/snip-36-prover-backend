@@ -1,47 +1,12 @@
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
 use snip36_core::config::Config;
 use snip36_core::rpc::StarknetRpc;
 use snip36_core::types::Session;
 use tokio::sync::{Mutex, RwLock};
 
-/// Deployed CoinFlip contract info (shared across all sessions).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoinFlipDeployment {
-    pub contract_address: String,
-    pub class_hash: String,
-    pub deploy_block: u64,
-}
-
-/// Deployed CoinFlipBank contract info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BankDeployment {
-    pub contract_address: String,
-    pub class_hash: String,
-    pub deploy_block: u64,
-}
-
-/// Persisted deployment state (saved to output/deployments.json).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PersistedDeployments {
-    pub coinflip: Option<CoinFlipDeployment>,
-    pub bank: Option<BankDeployment>,
-}
-
-/// A committed bet waiting to be revealed.
-#[derive(Debug, Clone)]
-pub struct BetCommitment {
-    /// pedersen(bet, nonce) — computed by the player
-    pub commitment: String,
-    /// Block number locked at commit time (used as seed)
-    pub seed_block: u64,
-    /// Player address
-    pub player: String,
-    /// Bet amount in wei (hex string), set after deposit-info
-    pub bet_amount: Option<String>,
-    /// Session ID as felt252 hex (for on-chain contract)
-    pub session_felt: String,
-}
+pub use crate::coinflip_state::{
+    BankDeployment, BetCommitment, CoinFlipDeployment, PersistedDeployments,
+};
 
 /// Shared application state, wrapped in `Arc` by Axum.
 pub struct AppState {
@@ -81,9 +46,7 @@ impl AppState {
     fn load_deployments(config: &Config) -> PersistedDeployments {
         let path = Self::deployments_path(config);
         match std::fs::read_to_string(&path) {
-            Ok(contents) => {
-                serde_json::from_str(&contents).unwrap_or_default()
-            }
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
             Err(_) => PersistedDeployments::default(),
         }
     }

@@ -16,7 +16,8 @@ use snip36_core::rpc::receipt_block_number;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{ResourceBounds, SubmitParams, INCREMENT_SELECTOR, STRK_TOKEN};
+use snip36_core::selectors::INCREMENT_SELECTOR;
+use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 
 use crate::state::AppState;
@@ -500,7 +501,7 @@ pub async fn prove_block(
             .rpc
             .starknet_call(
                 &contract_address,
-                snip36_core::types::GET_COUNTER_SELECTOR,
+                snip36_core::selectors::GET_COUNTER_SELECTOR,
                 &[],
             )
             .await
