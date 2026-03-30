@@ -34,6 +34,7 @@ pub async fn deploy_account(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployAccountRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let _lock = state.sncast_lock.lock().await;
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",

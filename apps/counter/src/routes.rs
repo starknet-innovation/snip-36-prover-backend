@@ -238,6 +238,7 @@ pub async fn deploy_counter(
     Json(req): Json<DeployCounterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let cwd = state.config.contracts_dir();
+    let _lock = state.sncast_lock.lock().await;
 
     // Declare
     let declare_output = tokio::process::Command::new("sncast")

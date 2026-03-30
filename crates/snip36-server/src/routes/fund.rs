@@ -36,6 +36,7 @@ pub async fn fund_account(
 
     let calldata = format!("{} {} {}", req.account_address, amount_low, amount_high);
 
+    let _lock = state.sncast_lock.lock().await;
     let output = tokio::process::Command::new("sncast")
         .args([
             "--account",

@@ -12,9 +12,7 @@ pub struct AppState {
     pub config: Config,
     pub rpc: StarknetRpc,
     pub sessions: DashMap<String, Session>,
-    /// Mutex for serializing sncast invocations that share the master account nonce.
-    /// Currently only used by coinflip routes; deploy-account and fund use
-    /// separate nonces or are unlikely to race in practice.
+    /// Mutex to serialize sncast invocations that share the master account nonce.
     pub sncast_lock: Mutex<()>,
 }
 
