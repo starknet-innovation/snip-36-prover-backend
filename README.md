@@ -233,18 +233,31 @@ The test deploys the CoinFlip contract, proves a round, and verifies the settlem
 snip-36-prover-backend/
 ├── Cargo.toml                       # Workspace root
 ├── crates/
-│   ├── snip36-core/                 # Shared library (config, RPC, signing, proof)
+│   ├── snip36-core/                 # Use-case-independent SDK
+│   │   ├── config.rs                #   Environment + toolchain config
+│   │   ├── rpc.rs                   #   Starknet JSON-RPC client
+│   │   ├── signing.rs               #   SNIP-36 tx hash + ECDSA signing
+│   │   ├── proof.rs                 #   Proof encoding/decoding
+│   │   ├── types.rs                 #   Generic types + chain-level constants
+│   │   └── selectors.rs             #   Example contract selectors (not core API)
 │   ├── snip36-cli/                  # Unified CLI binary
 │   └── snip36-server/               # Axum web backend
+│       ├── routes/
+│       │   ├── prove.rs, submit.rs  #   Generic SNIP-36 routes
+│       │   ├── deploy.rs, fund.rs   #   Generic account/funding routes
+│       │   ├── counter.rs           #   Counter example routes
+│       │   └── coinflip.rs          #   CoinFlip game routes
+│       └── coinflip_state.rs        #   CoinFlip-specific state types
 ├── extractor/                       # Virtual OS program extractor
 ├── scripts/                         # Shell scripts for external binary orchestration
 │   ├── setup.sh                     # Environment setup
 │   └── run-virtual-os.sh            # Execute virtual OS + prove
 ├── tests/
-│   ├── contracts/                   # Cairo test contracts (Counter, Messenger, CoinFlip)
+│   ├── contracts/                   # Cairo test contracts (Counter, Messenger, CoinFlip, CoinFlipBank)
 │   └── *.sh / *.py                  # Legacy test scripts (kept for reference)
 ├── web/
-│   └── frontend/                    # React + TypeScript playground UI
+│   ├── frontend/                    # React + TypeScript playground UI
+│   └── coinflip/                    # CoinFlip demo UI
 ├── sample-input/                    # Prover/bootloader config templates
 ├── deps/                            # (generated) Cloned repos + built binaries
 └── output/                          # (generated) Proofs and artifacts
