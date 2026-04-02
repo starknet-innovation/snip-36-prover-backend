@@ -1,32 +1,29 @@
 [package]
-name = "snip36-cli"
+name = "snip36-coinflip"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Unified CLI for SNIP-36 virtual block proving"
-
-[[bin]]
-name = "snip36"
-path = "src/main.rs"
+description = "CoinFlip game application for SNIP-36"
 
 [dependencies]
-snip36-core = { path = "../snip36-core" }
-snip36-counter = { path = "../../apps/counter" }
-snip36-messages = { path = "../../apps/messages" }
-snip36-coinflip = { path = "../../apps/coinflip" }
+snip36-core = { path = "../../crates/snip36-core", features = ["cli"] }
+snip36-server = { path = "../../crates/snip36-server" }
 starknet-types-core = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 color-eyre = { workspace = true }
 eyre = { workspace = true }
-base64 = { workspace = true }
 hex = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+axum = { version = "0.8", features = ["macros"] }
+tokio-stream = "0.1"
+regex-lite = "0.1"
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
-regex-lite = "0.1"
-rand = { workspace = true }
 tempfile = "3"

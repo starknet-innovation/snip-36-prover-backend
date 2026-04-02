@@ -1739,12 +1739,42 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "snip36-coinflip",
  "snip36-core",
+ "snip36-counter",
+ "snip36-messages",
  "starknet-types-core",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "snip36-coinflip"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "clap",
+ "color-eyre",
+ "dashmap",
+ "eyre",
+ "hex",
+ "indicatif",
+ "rand 0.8.5",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snip36-core",
+ "snip36-server",
+ "starknet-types-core",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1754,6 +1784,7 @@ dependencies = [
  "base64",
  "dotenvy",
  "hex",
+ "regex-lite",
  "reqwest",
  "serde",
  "serde_json",
@@ -1762,6 +1793,64 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "snip36-counter"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "clap",
+ "color-eyre",
+ "eyre",
+ "hex",
+ "indicatif",
+ "rand 0.8.5",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snip36-core",
+ "snip36-server",
+ "starknet-types-core",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "snip36-messages"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "eyre",
+ "hex",
+ "rand 0.8.5",
+ "reqwest",
+ "serde_json",
+ "snip36-core",
+ "starknet-types-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "snip36-playground"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "color-eyre",
+ "snip36-coinflip",
+ "snip36-core",
+ "snip36-counter",
+ "snip36-server",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

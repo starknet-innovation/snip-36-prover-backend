@@ -5,12 +5,12 @@ use color_eyre::eyre::Result;
 use tracing::{error, info};
 
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::types::{
-    BALANCE_OF_SELECTOR, GET_COUNTER_SELECTOR, OZ_ACCOUNT_CLASS_HASH, STRK_TOKEN,
-};
+use snip36_core::types::{BALANCE_OF_SELECTOR, OZ_ACCOUNT_CLASS_HASH, STRK_TOKEN};
 use snip36_core::Config;
 
-use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use crate::selectors::GET_COUNTER_SELECTOR;
+
+use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
 
 static PASSED: AtomicU32 = AtomicU32::new(0);
 static FAILED: AtomicU32 = AtomicU32::new(0);
@@ -37,7 +37,7 @@ fn check_fail(name: &str, detail: &str) {
 pub struct HealthArgs {
     /// Skip the full flow check (only run RPC checks)
     #[arg(long)]
-    quick: bool,
+    pub quick: bool,
 }
 
 pub async fn run(args: HealthArgs, env_file: Option<&std::path::Path>) -> Result<()> {

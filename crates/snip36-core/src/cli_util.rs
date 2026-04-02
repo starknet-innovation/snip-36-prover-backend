@@ -1,9 +1,6 @@
-pub mod deploy;
-pub mod extract;
-pub mod fund;
-pub mod prove;
-pub mod setup;
-pub mod submit;
+//! CLI helper utilities for parsing subprocess output.
+//!
+//! Available when the `cli` feature is enabled.
 
 use std::process::Output;
 
@@ -28,7 +25,6 @@ pub fn parse_hex_from_output(key: &str, text: &str) -> Option<String> {
 }
 
 /// Extract a long hex value (50+ hex chars) from text, useful for class hashes.
-#[allow(dead_code)]
 pub fn parse_long_hex(text: &str) -> Option<String> {
     let re = regex_lite::Regex::new(r"0x[0-9a-fA-F]{50,}").ok()?;
     re.find(text).map(|m| m.as_str().to_string())

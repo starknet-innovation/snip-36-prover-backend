@@ -1,42 +1,43 @@
-mod routes;
-mod state;
+//! Full SNIP-36 playground server.
+//!
+//! Composes the generic SDK routes with Counter and CoinFlip example routes.
 
 use std::sync::Arc;
 
 use snip36_core::config::Config;
+use snip36_server::AppState;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
-use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    // Set up tracing with RUST_LOG env filter
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    // Load configuration from environment / .env
     let config = Config::from_env(None)?;
-    info!(rpc_url = %config.rpc_url, "Starting SNIP-36 server");
+    info!(rpc_url = %config.rpc_url, "Starting SNIP-36 playground");
 
-    // Import the sncast account so deploy/fund routes work on fresh installs
     ensure_sncast_account(&config).await;
 
     let state = Arc::new(AppState::new(config));
 
-    // CORS: allow all origins (playground demo)
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = routes::api_router().with_state(state).layer(cors);
+    // Compose generic SDK routes + app-specific routes
+    let app = snip36_server::routes::generic_routes()
+        .with_state(state.clone())
+        .merge(snip36_counter::routes::counter_routes().with_state(state.clone()))
+        .merge(snip36_coinflip::routes::coinflip_routes(state))
+        .layer(cors);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8090".into());
     let addr = format!("0.0.0.0:{port}");
@@ -47,10 +48,7 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Import the master account into sncast so deploy/fund routes can use it.
-///
-/// This is idempotent — if the account already exists, sncast returns an error
-/// which we silently ignore.
+/// Import the master account into sncast so deploy/fund routes work on fresh installs.
 async fn ensure_sncast_account(config: &Config) {
     let account_name = config.sncast_account();
     info!(account = %account_name, "Importing sncast account");

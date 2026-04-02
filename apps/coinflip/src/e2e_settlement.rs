@@ -13,12 +13,11 @@ use snip36_core::rpc::{receipt_block_number, StarknetRpc};
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{
-    ResourceBounds, SubmitParams, BALANCE_OF_SELECTOR, PLAY_SELECTOR, STRK_TOKEN,
-};
+use crate::selectors::PLAY_SELECTOR;
+use snip36_core::types::{ResourceBounds, SubmitParams, BALANCE_OF_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
-use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -70,23 +69,23 @@ fn format_duration(d: std::time::Duration) -> String {
 pub struct E2eSettlementArgs {
     /// Remote prover URL (skip local starknet_os_runner)
     #[arg(long)]
-    prover_url: Option<String>,
+    pub prover_url: Option<String>,
 
     /// Output directory for E2E artifacts
     #[arg(long, default_value = "output/e2e-settlement")]
-    output_dir: PathBuf,
+    pub output_dir: PathBuf,
 
     /// Stop after proving — save proof locally without submitting
     #[arg(long)]
-    prove_only: bool,
+    pub prove_only: bool,
 
     /// Player bet: 0 (heads) or 1 (tails)
     #[arg(long, default_value = "0")]
-    bet: u8,
+    pub bet: u8,
 
     /// Bet amount in STRK (e.g. 0.001)
     #[arg(long, default_value = "0.001")]
-    bet_amount: f64,
+    pub bet_amount: f64,
 }
 
 pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) -> Result<()> {

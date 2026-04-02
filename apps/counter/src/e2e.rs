@@ -12,12 +12,12 @@ use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{
-    ResourceBounds, SubmitParams, GET_COUNTER_SELECTOR, INCREMENT_SELECTOR, STRK_TOKEN,
-};
+use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use snip36_core::Config;
 
-use super::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use crate::selectors::{GET_COUNTER_SELECTOR, INCREMENT_SELECTOR};
+
+use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -98,27 +98,27 @@ fn encode_account_calls(calls: Vec<(String, String, Vec<String>)>) -> Vec<String
 pub struct E2eArgs {
     /// Remote prover URL (skip local starknet_os_runner)
     #[arg(long)]
-    prover_url: Option<String>,
+    pub prover_url: Option<String>,
 
     /// Output directory for E2E artifacts
     #[arg(long, default_value = "output/e2e")]
-    output_dir: PathBuf,
+    pub output_dir: PathBuf,
 
     /// Number of SNOS virtual blocks to prove and submit
     #[arg(long, default_value = "1")]
-    snos_blocks: u32,
+    pub snos_blocks: u32,
 
     /// Amount to pass to each increment() call
     #[arg(long, default_value = "1")]
-    counter_increments: u64,
+    pub counter_increments: u64,
 
     /// Number of increment() calls per SNOS block
     #[arg(long, default_value = "1")]
-    increments_per_snos: u32,
+    pub increments_per_snos: u32,
 
-    /// Stop after proving — save proof and proof_facts locally without submitting via RPC
+    /// Stop after proving -- save proof and proof_facts locally without submitting via RPC
     #[arg(long)]
-    prove_only: bool,
+    pub prove_only: bool,
 }
 
 pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -148,7 +148,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
     info!(
-        "  Blocks:  {} × {} calls × increment({}) = +{} total",
+        "  Blocks:  {} x {} calls x increment({}) = +{} total",
         args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected
     );
     info!("");
@@ -667,7 +667,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     if args.prove_only {
         step(5 + args.snos_blocks, "Prove-only complete");
         pass(&format!(
-            "All {} block(s) proved — artifacts saved to {}",
+            "All {} block(s) proved -- artifacts saved to {}",
             args.snos_blocks,
             args.output_dir.display()
         ));

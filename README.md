@@ -91,7 +91,6 @@ snip36 prove program       # Prove a compiled Cairo program directly
 snip36 prove pie           # Prove a Cairo PIE via bootloader
 snip36 submit              # Sign and submit proof via RPC
 snip36 deploy account      # Deploy an OZ account contract
-snip36 deploy counter      # Declare and deploy a counter contract
 snip36 fund                # Transfer STRK from master account
 snip36 health              # Run CI health checks
 snip36 setup               # Install all external dependencies
@@ -103,13 +102,16 @@ snip36 extract             # Extract virtual OS program
 
 Global options: `--env-file <path>`, `--verbose`, `--quiet`
 
+Example application contracts are deployed via the playground backend routes or
+with `sncast` directly; the generic CLI only exposes `snip36 deploy account`.
+
 ## Web Playground
 
 Interactive web UI for developers to explore the SNIP-36 proving pipeline:
 
 ```bash
 # Backend (Rust):
-cargo run --release -p snip36-server
+cargo run --release -p snip36-playground
 
 # Frontend (React):
 cd web/frontend && npm install && npm run dev
@@ -119,15 +121,15 @@ Open http://localhost:3000
 
 ## Full Pipeline (Step by Step)
 
-### Step 1: Deploy and invoke a contract
+### Step 1: Prepare an account and deploy/invoke a contract
 
 ```bash
-snip36 deploy counter
+snip36 deploy account --public-key $PUBLIC_KEY
 snip36 fund --to $TARGET_ADDRESS
-```
 
-Or use `sncast` directly:
-```bash
+# Example app contracts are deployed with sncast (or through the playground backend):
+sncast --account myaccount declare --contract-name Counter --url $STARKNET_RPC_URL
+sncast --account myaccount deploy --class-hash $CLASS_HASH --url $STARKNET_RPC_URL
 sncast --account myaccount invoke --url $STARKNET_RPC_URL \
   --contract-address 0x... --function increment --calldata 0x1
 ```
@@ -232,19 +234,22 @@ The test deploys the CoinFlip contract, proves a round, and verifies the settlem
 ```
 snip-36-prover-backend/
 ├── Cargo.toml                       # Workspace root
-├── crates/
-│   ├── snip36-core/                 # Shared library (config, RPC, signing, proof)
-│   ├── snip36-cli/                  # Unified CLI binary
-│   └── snip36-server/               # Axum web backend
+├── crates/                          # SDK — use-case-independent infrastructure
+│   ├── snip36-core/                 #   Pure library (config, RPC, signing, proof, types)
+│   ├── snip36-cli/                  #   Unified CLI binary (generic + dispatches to apps)
+│   └── snip36-server/               #   Server library (generic Axum routes + AppState)
+├── apps/                            # Example applications built on the SDK
+│   ├── counter/                     #   Counter contract (routes, selectors, e2e, health)
+│   ├── messages/                    #   L2→L1 messages (selectors, e2e)
+│   ├── coinflip/                    #   CoinFlip game (routes, state, selectors, e2e, settlement)
+│   └── playground/                  #   Full server binary (composes SDK + all apps)
 ├── extractor/                       # Virtual OS program extractor
 ├── scripts/                         # Shell scripts for external binary orchestration
-│   ├── setup.sh                     # Environment setup
-│   └── run-virtual-os.sh            # Execute virtual OS + prove
 ├── tests/
-│   ├── contracts/                   # Cairo test contracts (Counter, Messenger, CoinFlip)
-│   └── *.sh / *.py                  # Legacy test scripts (kept for reference)
+│   └── contracts/                   # Cairo test contracts (Counter, Messenger, CoinFlip, CoinFlipBank)
 ├── web/
-│   └── frontend/                    # React + TypeScript playground UI
+│   ├── frontend/                    # React + TypeScript playground UI
+│   └── coinflip/                    # CoinFlip demo UI
 ├── sample-input/                    # Prover/bootloader config templates
 ├── deps/                            # (generated) Cloned repos + built binaries
 └── output/                          # (generated) Proofs and artifacts

@@ -47,7 +47,6 @@ snip36 setup                         # Install external deps
 snip36 prove virtual-os --block-number N --tx-hash 0x... --rpc-url URL
 snip36 prove program --program file.json --output proof.out
 snip36 submit --proof proof.b64 --proof-facts facts.json --calldata 0x1,0x2 --contract-address 0x...
-snip36 deploy counter
 snip36 deploy account --public-key 0x...
 snip36 fund --to 0x... --amount 10000000000000000000
 snip36 health
@@ -62,7 +61,7 @@ snip36 e2e-coinflip          # Provable coin flip example (off-chain game)
 
 ```bash
 # Backend (Rust):
-cargo run --release -p snip36-server
+cargo run --release -p snip36-playground
 
 # Frontend (unchanged):
 cd web/frontend && npm install && npm run dev
