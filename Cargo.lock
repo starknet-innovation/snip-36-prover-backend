@@ -1824,20 +1824,15 @@ dependencies = [
 name = "snip36-messages"
 version = "0.1.0"
 dependencies = [
- "base64",
  "clap",
  "color-eyre",
  "eyre",
  "hex",
- "indicatif",
  "rand 0.8.5",
- "regex-lite",
  "reqwest",
- "serde",
  "serde_json",
  "snip36-core",
  "starknet-types-core",
- "tempfile",
  "tokio",
  "tracing",
 ]

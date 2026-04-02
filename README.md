@@ -91,7 +91,6 @@ snip36 prove program       # Prove a compiled Cairo program directly
 snip36 prove pie           # Prove a Cairo PIE via bootloader
 snip36 submit              # Sign and submit proof via RPC
 snip36 deploy account      # Deploy an OZ account contract
-snip36 deploy counter      # Declare and deploy a counter contract
 snip36 fund                # Transfer STRK from master account
 snip36 health              # Run CI health checks
 snip36 setup               # Install all external dependencies
@@ -102,6 +101,9 @@ snip36 extract             # Extract virtual OS program
 ```
 
 Global options: `--env-file <path>`, `--verbose`, `--quiet`
+
+Example application contracts are deployed via the playground backend routes or
+with `sncast` directly; the generic CLI only exposes `snip36 deploy account`.
 
 ## Web Playground
 
@@ -119,15 +121,15 @@ Open http://localhost:3000
 
 ## Full Pipeline (Step by Step)
 
-### Step 1: Deploy and invoke a contract
+### Step 1: Prepare an account and deploy/invoke a contract
 
 ```bash
-snip36 deploy counter
+snip36 deploy account --public-key $PUBLIC_KEY
 snip36 fund --to $TARGET_ADDRESS
-```
 
-Or use `sncast` directly:
-```bash
+# Example app contracts are deployed with sncast (or through the playground backend):
+sncast --account myaccount declare --contract-name Counter --url $STARKNET_RPC_URL
+sncast --account myaccount deploy --class-hash $CLASS_HASH --url $STARKNET_RPC_URL
 sncast --account myaccount invoke --url $STARKNET_RPC_URL \
   --contract-address 0x... --function increment --calldata 0x1
 ```

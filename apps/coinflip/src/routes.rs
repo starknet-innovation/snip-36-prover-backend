@@ -10,15 +10,17 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::selectors::PLAY_SELECTOR;
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::receipt_block_number;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
-use crate::selectors::PLAY_SELECTOR;
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 use tracing::info;
 
-use crate::state::{CoinFlipAppState, BetCommitment, CoinFlipDeployment};
+use crate::state::{BetCommitment, CoinFlipAppState, CoinFlipDeployment};
 
 use snip36_server::routes::fund::error_response;
 use snip36_server::routes::prove_block::find_snip36_bin;
@@ -78,85 +80,102 @@ pub async fn deploy_coinflip(
 
     let cwd = state.app.config.contracts_dir();
     let account_name = state.app.config.sncast_account();
+    let (contract_address, class_hash, deploy_block) = {
+        // Declare/deploy share the master account nonce with other sncast-backed
+        // endpoints, so keep them serialized until the deploy tx is confirmed.
+        let _lock = state.app.sncast_lock.lock().await;
 
-    // Declare CoinFlip
-    info!("Declaring CoinFlip contract...");
-    let declare_output = tokio::process::Command::new("sncast")
-        .args([
-            "--account", &account_name,
-            "declare", "--contract-name", "CoinFlip",
-            "--url", &state.app.config.rpc_url,
-        ])
-        .current_dir(&cwd)
-        .output()
-        .await
-        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        info!("Declaring CoinFlip contract...");
+        let declare_output = tokio::process::Command::new("sncast")
+            .args([
+                "--account",
+                &account_name,
+                "declare",
+                "--contract-name",
+                "CoinFlip",
+                "--url",
+                &state.app.config.rpc_url,
+            ])
+            .current_dir(&cwd)
+            .output()
+            .await
+            .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let declare_combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&declare_output.stdout),
-        String::from_utf8_lossy(&declare_output.stderr),
-    );
+        let declare_combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&declare_output.stdout),
+            String::from_utf8_lossy(&declare_output.stderr),
+        );
 
-    let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("CoinFlip declare failed: {declare_combined}"),
-        )
-    })?;
-    info!(class_hash = %class_hash, "CoinFlip declared");
+        let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("CoinFlip declare failed: {declare_combined}"),
+            )
+        })?;
+        info!(class_hash = %class_hash, "CoinFlip declared");
 
-    // Wait for declare tx if present
-    if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
-        let _ = state.app.rpc.wait_for_tx(&tx, 120, 3).await;
-    }
+        if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
+            let _ = state.app.rpc.wait_for_tx(&tx, 120, 3).await;
+        }
 
-    // Deploy with random salt
-    let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
-    let deploy_output = tokio::process::Command::new("sncast")
-        .args([
-            "--account", &account_name,
-            "deploy", "--class-hash", &class_hash,
-            "--salt", &salt,
-            "--url", &state.app.config.rpc_url,
-        ])
-        .output()
-        .await
-        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
+        let deploy_output = tokio::process::Command::new("sncast")
+            .args([
+                "--account",
+                &account_name,
+                "deploy",
+                "--class-hash",
+                &class_hash,
+                "--salt",
+                &salt,
+                "--url",
+                &state.app.config.rpc_url,
+            ])
+            .output()
+            .await
+            .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let deploy_combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&deploy_output.stdout),
-        String::from_utf8_lossy(&deploy_output.stderr),
-    );
+        let deploy_combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&deploy_output.stdout),
+            String::from_utf8_lossy(&deploy_output.stderr),
+        );
 
-    if !deploy_output.status.success() {
-        return Err(error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("CoinFlip deploy failed: {deploy_combined}"),
-        ));
-    }
+        if !deploy_output.status.success() {
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("CoinFlip deploy failed: {deploy_combined}"),
+            ));
+        }
 
-    let contract_address = parse_hex("contract_address", &deploy_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("No contract_address in deploy output: {deploy_combined}"),
-        )
-    })?;
+        let contract_address =
+            parse_hex("contract_address", &deploy_combined).ok_or_else(|| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("No contract_address in deploy output: {deploy_combined}"),
+                )
+            })?;
 
-    let tx_hash = parse_hex("transaction_hash", &deploy_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("No transaction_hash in deploy output: {deploy_combined}"),
-        )
-    })?;
+        let tx_hash = parse_hex("transaction_hash", &deploy_combined).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("No transaction_hash in deploy output: {deploy_combined}"),
+            )
+        })?;
 
-    info!(tx_hash = %tx_hash, contract_address = %contract_address, "CoinFlip deployed");
+        info!(tx_hash = %tx_hash, contract_address = %contract_address, "CoinFlip deployed");
 
-    let receipt = state.app.rpc.wait_for_tx(&tx_hash, 120, 3).await.map_err(|e| {
-        error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string())
-    })?;
-    let deploy_block = receipt_block_number(&receipt).unwrap_or(0);
+        let receipt = state
+            .app
+            .rpc
+            .wait_for_tx(&tx_hash, 120, 3)
+            .await
+            .map_err(|e| error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()))?;
+        let deploy_block = receipt_block_number(&receipt).unwrap_or(0);
+
+        (contract_address, class_hash, deploy_block)
+    };
 
     let deployment = CoinFlipDeployment {
         contract_address: contract_address.clone(),
@@ -287,9 +306,8 @@ pub async fn play_coinflip(
 
     // Verify commitment: pedersen(bet, nonce) == commitment
     let bet_felt = Felt::from(bet as u64);
-    let nonce_felt = felt_from_hex(&params.nonce).map_err(|e| {
-        error_response(StatusCode::BAD_REQUEST, &format!("Invalid nonce: {e}"))
-    })?;
+    let nonce_felt = felt_from_hex(&params.nonce)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &format!("Invalid nonce: {e}")))?;
     let computed = snip36_core::pedersen_hash(&bet_felt, &nonce_felt);
     let computed_hex = format!("{:#x}", computed);
 
@@ -571,9 +589,7 @@ pub async fn play_coinflip(
                     if let Some(msgs) = msg_json.get("l2_to_l1_messages").and_then(|v| v.as_array())
                     {
                         if let Some(first) = msgs.first() {
-                            if let Some(payload) =
-                                first.get("payload").and_then(|v| v.as_array())
-                            {
+                            if let Some(payload) = first.get("payload").and_then(|v| v.as_array()) {
                                 let fields: Vec<String> = payload
                                     .iter()
                                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -588,9 +604,7 @@ pub async fn play_coinflip(
                                     won = fields[4] == "0x1";
                                     send(
                                         "log",
-                                        &format!(
-                                            "Settlement: outcome={outcome_label} won={won}"
-                                        ),
+                                        &format!("Settlement: outcome={outcome_label} won={won}"),
                                     )
                                     .await;
                                 }
@@ -663,7 +677,13 @@ pub async fn play_coinflip(
         let gw_tx_hash_hex = format!("{:#x}", gw_tx_hash);
         let submit_url = format!(
             "{}/gateway/add_transaction",
-            state.app.config.gateway_url.as_deref().unwrap_or("").trim_end_matches('/')
+            state
+                .app
+                .config
+                .gateway_url
+                .as_deref()
+                .unwrap_or("")
+                .trim_end_matches('/')
         );
 
         send(
@@ -708,13 +728,14 @@ pub async fn play_coinflip(
                         .await;
                         accepted = true;
                         break;
-                    } else if (msg.contains("too recent")
-                        || msg.contains("stored block hash: 0"))
+                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
                         && attempt < max_attempts
                     {
                         send(
                             "log",
-                            &format!("Not ready (attempt {attempt}/{max_attempts}), waiting 10s..."),
+                            &format!(
+                                "Not ready (attempt {attempt}/{max_attempts}), waiting 10s..."
+                            ),
                         )
                         .await;
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -766,7 +787,11 @@ pub async fn play_coinflip(
             match sncast_invoke(&state, &bank_address, "settle", &settle_calldata).await {
                 Ok(result) => {
                     if let Some(tx) = result.tx_hash {
-                        send("log", &format!("Settlement tx: {}", tx.get(..18).unwrap_or(&tx))).await;
+                        send(
+                            "log",
+                            &format!("Settlement tx: {}", tx.get(..18).unwrap_or(&tx)),
+                        )
+                        .await;
                         send("log", "Settlement confirmed").await;
                         settle_tx_hash_hex = tx;
                     } else {
@@ -816,7 +841,8 @@ pub async fn bank_status(State(state): State<Arc<CoinFlipAppState>>) -> Json<Ban
     match lock.as_ref() {
         Some(d) => {
             // Read the bank contract's STRK balance
-            let balance_of_selector = "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e";
+            let balance_of_selector =
+                "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e";
             let bank_balance = state
                 .app
                 .rpc
@@ -870,78 +896,97 @@ pub async fn deploy_bank(
 
     let cwd = state.app.config.contracts_dir();
     let account_name = state.app.config.sncast_account();
+    let (contract_address, class_hash, deploy_block) = {
+        // Declare/deploy share the master account nonce with other sncast-backed
+        // endpoints, so keep them serialized until the deploy tx is confirmed.
+        let _lock = state.app.sncast_lock.lock().await;
 
-    // Declare CoinFlipBank
-    info!("Declaring CoinFlipBank contract...");
-    let declare_output = tokio::process::Command::new("sncast")
-        .args([
-            "--account", &account_name,
-            "declare", "--contract-name", "CoinFlipBank",
-            "--url", &state.app.config.rpc_url,
-        ])
-        .current_dir(&cwd)
-        .output()
-        .await
-        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        info!("Declaring CoinFlipBank contract...");
+        let declare_output = tokio::process::Command::new("sncast")
+            .args([
+                "--account",
+                &account_name,
+                "declare",
+                "--contract-name",
+                "CoinFlipBank",
+                "--url",
+                &state.app.config.rpc_url,
+            ])
+            .current_dir(&cwd)
+            .output()
+            .await
+            .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let declare_combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&declare_output.stdout),
-        String::from_utf8_lossy(&declare_output.stderr),
-    );
+        let declare_combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&declare_output.stdout),
+            String::from_utf8_lossy(&declare_output.stderr),
+        );
 
-    let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("CoinFlipBank declare failed: {declare_combined}"),
-        )
-    })?;
-    info!(class_hash = %class_hash, "CoinFlipBank declared");
+        let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("CoinFlipBank declare failed: {declare_combined}"),
+            )
+        })?;
+        info!(class_hash = %class_hash, "CoinFlipBank declared");
 
-    if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
-        let _ = state.app.rpc.wait_for_tx(&tx, 120, 3).await;
-    }
+        if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
+            let _ = state.app.rpc.wait_for_tx(&tx, 120, 3).await;
+        }
 
-    // Deploy with constructor(owner=master_account)
-    let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
-    let deploy_output = tokio::process::Command::new("sncast")
-        .args([
-            "--account", &account_name,
-            "deploy", "--class-hash", &class_hash,
-            "--constructor-calldata", &state.app.config.account_address,
-            "--salt", &salt,
-            "--url", &state.app.config.rpc_url,
-        ])
-        .output()
-        .await
-        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
+        let deploy_output = tokio::process::Command::new("sncast")
+            .args([
+                "--account",
+                &account_name,
+                "deploy",
+                "--class-hash",
+                &class_hash,
+                "--constructor-calldata",
+                &state.app.config.account_address,
+                "--salt",
+                &salt,
+                "--url",
+                &state.app.config.rpc_url,
+            ])
+            .output()
+            .await
+            .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let deploy_combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&deploy_output.stdout),
-        String::from_utf8_lossy(&deploy_output.stderr),
-    );
+        let deploy_combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&deploy_output.stdout),
+            String::from_utf8_lossy(&deploy_output.stderr),
+        );
 
-    let contract_address = parse_hex("contract_address", &deploy_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("CoinFlipBank deploy failed: {deploy_combined}"),
-        )
-    })?;
+        let contract_address =
+            parse_hex("contract_address", &deploy_combined).ok_or_else(|| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("CoinFlipBank deploy failed: {deploy_combined}"),
+                )
+            })?;
 
-    let tx_hash = parse_hex("transaction_hash", &deploy_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("No tx_hash in deploy output: {deploy_combined}"),
-        )
-    })?;
+        let tx_hash = parse_hex("transaction_hash", &deploy_combined).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("No tx_hash in deploy output: {deploy_combined}"),
+            )
+        })?;
 
-    info!(tx_hash = %tx_hash, contract_address = %contract_address, "CoinFlipBank deployed");
+        info!(tx_hash = %tx_hash, contract_address = %contract_address, "CoinFlipBank deployed");
 
-    let receipt = state.app.rpc.wait_for_tx(&tx_hash, 120, 3).await.map_err(|e| {
-        error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string())
-    })?;
-    let deploy_block = receipt_block_number(&receipt).unwrap_or(0);
+        let receipt = state
+            .app
+            .rpc
+            .wait_for_tx(&tx_hash, 120, 3)
+            .await
+            .map_err(|e| error_response(StatusCode::GATEWAY_TIMEOUT, &e.to_string()))?;
+        let deploy_block = receipt_block_number(&receipt).unwrap_or(0);
+
+        (contract_address, class_hash, deploy_block)
+    };
 
     // Approve bank to spend master's STRK (max u128 approval)
     let max_approval = "0xffffffffffffffffffffffffffffffff";
@@ -1006,14 +1051,14 @@ pub async fn deposit_info(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let bank = {
         let lock = state.bank.read().await;
-        lock.clone().ok_or_else(|| {
-            error_response(StatusCode::BAD_REQUEST, "Bank not deployed")
-        })?
+        lock.clone()
+            .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Bank not deployed"))?
     };
 
-    let commitment = state.commitments.get(&req.session_id).ok_or_else(|| {
-        error_response(StatusCode::BAD_REQUEST, "No commitment for this session")
-    })?;
+    let commitment = state
+        .commitments
+        .get(&req.session_id)
+        .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "No commitment for this session"))?;
 
     let amount_wei = (req.bet_amount * 1e18) as u128;
     let amount_low = format!("{:#x}", amount_wei);
@@ -1063,32 +1108,46 @@ pub async fn confirm_deposit(
     Json(req): Json<ConfirmDepositRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     // Wait for player's deposit tx
-    state.app.rpc.wait_for_tx(&req.tx_hash, 120, 3).await.map_err(|e| {
-        error_response(StatusCode::GATEWAY_TIMEOUT, &format!("Deposit tx not confirmed: {e}"))
-    })?;
+    state
+        .app
+        .rpc
+        .wait_for_tx(&req.tx_hash, 120, 3)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                &format!("Deposit tx not confirmed: {e}"),
+            )
+        })?;
 
     let bank = {
         let lock = state.bank.read().await;
-        lock.clone().ok_or_else(|| {
-            error_response(StatusCode::BAD_REQUEST, "Bank not deployed")
-        })?
+        lock.clone()
+            .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Bank not deployed"))?
     };
 
-    let commitment = state.commitments.get(&req.session_id).ok_or_else(|| {
-        error_response(StatusCode::BAD_REQUEST, "No commitment for this session")
-    })?;
+    let commitment = state
+        .commitments
+        .get(&req.session_id)
+        .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "No commitment for this session"))?;
     let session_felt = commitment.session_felt.clone();
     drop(commitment);
 
     // Server matches the deposit (sncast_invoke holds lock + waits for confirmation)
     let match_result = sncast_invoke(
-        &state, &bank.contract_address, "match_deposit", &session_felt,
+        &state,
+        &bank.contract_address,
+        "match_deposit",
+        &session_felt,
     )
     .await
     .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     let match_tx = match_result.tx_hash.ok_or_else(|| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Bank match: no tx hash in output")
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Bank match: no tx hash in output",
+        )
     })?;
 
     // Use the block where match_deposit was confirmed as seed_block.
@@ -1137,7 +1196,10 @@ pub async fn player_balance(
         .starknet_call(STRK_TOKEN, balance_of_selector, &[&address])
         .await
         .map_err(|e| {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("balance_of failed: {e}"))
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("balance_of failed: {e}"),
+            )
         })?;
 
     // Result is [low, high] as hex strings
@@ -1169,9 +1231,8 @@ pub async fn player_winnings(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let bank = {
         let lock = state.bank.read().await;
-        lock.clone().ok_or_else(|| {
-            error_response(StatusCode::BAD_REQUEST, "Bank not deployed")
-        })?
+        lock.clone()
+            .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Bank not deployed"))?
     };
 
     // get_balance(player) selector (from compiled contract entry_points_by_type)
@@ -1183,7 +1244,10 @@ pub async fn player_winnings(
         .starknet_call(&bank.contract_address, get_balance_selector, &[&address])
         .await
         .map_err(|e| {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("get_balance failed: {e}"))
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("get_balance failed: {e}"),
+            )
         })?;
 
     // u256 result: [low, high]
@@ -1224,12 +1288,17 @@ async fn sncast_invoke(
 
     let output = tokio::process::Command::new("sncast")
         .args([
-            "--account", &account_name,
+            "--account",
+            &account_name,
             "invoke",
-            "--url", &state.app.config.rpc_url,
-            "--contract-address", contract_address,
-            "--function", function,
-            "--calldata", calldata,
+            "--url",
+            &state.app.config.rpc_url,
+            "--contract-address",
+            contract_address,
+            "--function",
+            function,
+            "--calldata",
+            calldata,
         ])
         .output()
         .await
@@ -1260,7 +1329,11 @@ async fn sncast_invoke(
         tracing::error!(output = %combined.chars().take(500).collect::<String>(), "sncast invoke: no tx hash in output");
     }
 
-    Ok(InvokeResult { output, tx_hash, block_number })
+    Ok(InvokeResult {
+        output,
+        tx_hash,
+        block_number,
+    })
 }
 
 fn extract_long_hex(text: &str) -> Option<String> {

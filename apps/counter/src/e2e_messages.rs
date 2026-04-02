@@ -17,10 +17,9 @@ use snip36_core::Config;
 
 use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
 
-// Note: e2e_messages uses SEND_MESSAGE_SELECTOR from the Messenger contract,
-// not Counter selectors. We import it from snip36_core::selectors which still
-// exists in git HEAD (though removed from core lib.rs exports).
-// For now, define it locally to avoid depending on a removed module.
+// Note: this E2E covers the Messenger contract, not the Counter contract.
+// The canonical selector now lives in snip36_messages::selectors, but we keep
+// a local copy here to avoid adding a cross-app dependency from snip36-counter.
 const SEND_MESSAGE_SELECTOR: &str =
     "0x12ead94ae9d3f9d2bdb6b847cf255f1f398193a1f88884a0ae8e18f24a037b6";
 
@@ -606,10 +605,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                         let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
                         if code == "TRANSACTION_RECEIVED" {
-                            pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
+                            pass(&format!(
+                                "Gateway accepted (attempt {attempt}/{max_attempts})"
+                            ));
                             rpc_tx_hash = Some(local_tx_hash_hex.clone());
                             break;
-                        } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                        } else if (msg.contains("too recent")
+                            || msg.contains("stored block hash: 0"))
                             && attempt < max_attempts
                         {
                             info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
@@ -642,7 +644,9 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                         break;
                     }
                     Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
-                        info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
+                        info!(
+                            "  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})"
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     }
                     Err(e) => {
