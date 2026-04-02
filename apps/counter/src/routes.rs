@@ -406,8 +406,8 @@ pub async fn submit_proof(
         .to_string();
 
     // Read proof_facts
-    let proof_facts_file = proof_file.replace(".proof", ".proof_facts");
-    let proof_facts_json = tokio::fs::read_to_string(&proof_facts_file)
+    let proof_facts_path = proof_path.with_extension("proof_facts");
+    let proof_facts_json = tokio::fs::read_to_string(&proof_facts_path)
         .await
         .map_err(|e| {
             error_response(
