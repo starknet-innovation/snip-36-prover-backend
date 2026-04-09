@@ -1,0 +1,15 @@
+[package]
+name = "falcon"
+version = "0.1.0"
+edition = "2024_07"
+
+[lib]
+
+[dependencies]
+corelib_imports = "0.1.2"
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.55.0" }
+assert_macros = "2.17.0"
+falcon_old = { path = "../falcon_old" }
+falcon_zknox = { path = "../falcon_zknox" }

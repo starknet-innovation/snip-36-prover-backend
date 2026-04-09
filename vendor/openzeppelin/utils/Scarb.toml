@@ -1,0 +1,11 @@
+[package]
+name = "openzeppelin_utils"
+version = "2.1.0"
+edition = "2024_07"
+cairo-version = "2.17.0-rc.4"
+
+[dependencies]
+starknet = ">=2.9.1"
+openzeppelin_interfaces = { path = "../interfaces" }
+
+[lib]

@@ -7,7 +7,7 @@ on:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.2
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
   PROVING_UTILS_REV: dbc39e74
   STWO_NIGHTLY: nightly-2025-07-14
 

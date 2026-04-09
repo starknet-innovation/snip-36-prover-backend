@@ -17,7 +17,7 @@ on:
         default: 'deps-v1'
 
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.2
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
   PROVING_UTILS_REV: main
   STWO_NIGHTLY: nightly-2025-07-14
 
