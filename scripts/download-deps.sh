@@ -78,7 +78,7 @@ elif [ -f sequencer_venv/bin/cairo-compile ]; then
 else
   echo "WARNING: sequencer repo not cloned — cairo-compile not installed."
   echo "You may need to clone the sequencer for the Python venv:"
-  echo "  git clone --depth 1 -b PRIVACY-0.14.2-RC.2 https://github.com/starkware-libs/sequencer.git deps/sequencer"
+  echo "  git clone --depth 1 -b PRIVACY-0.14.2-RC.3 https://github.com/starkware-libs/sequencer.git deps/sequencer"
   echo "  sequencer_venv/bin/pip install -r deps/sequencer/scripts/requirements.txt"
 fi
 

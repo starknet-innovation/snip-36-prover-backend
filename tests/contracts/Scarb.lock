@@ -2,5 +2,59 @@
 version = 1
 
 [[package]]
+name = "corelib_imports"
+version = "0.1.3"
+source = "registry+https://scarbs.xyz/"
+checksum = "sha256:1dbf8982484a6a085a143f2352dfbc716261c50c60551eb03bff5f0167260ad9"
+
+[[package]]
+name = "falcon"
+version = "0.1.0"
+dependencies = [
+ "corelib_imports",
+]
+
+[[package]]
+name = "falcon_account"
+version = "0.1.0"
+dependencies = [
+ "falcon",
+ "openzeppelin_account",
+ "openzeppelin_interfaces",
+ "openzeppelin_introspection",
+ "openzeppelin_utils",
+]
+
+[[package]]
+name = "openzeppelin_account"
+version = "4.0.0-alpha.0"
+dependencies = [
+ "openzeppelin_interfaces",
+ "openzeppelin_introspection",
+ "openzeppelin_utils",
+]
+
+[[package]]
+name = "openzeppelin_interfaces"
+version = "2.1.0"
+
+[[package]]
+name = "openzeppelin_introspection"
+version = "4.0.0-alpha.0"
+dependencies = [
+ "openzeppelin_interfaces",
+]
+
+[[package]]
+name = "openzeppelin_utils"
+version = "2.1.0"
+dependencies = [
+ "openzeppelin_interfaces",
+]
+
+[[package]]
 name = "snip36_test_counter"
 version = "0.1.0"
+dependencies = [
+ "falcon_account",
+]

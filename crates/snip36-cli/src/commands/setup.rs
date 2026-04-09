@@ -10,7 +10,7 @@ use tracing::{debug, error, info};
 use snip36_core::Config;
 
 const PROVING_UTILS_VERSION: &str = "main";
-const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.2";
+const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.3";
 const STWO_NIGHTLY: &str = "nightly-2025-07-14";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
