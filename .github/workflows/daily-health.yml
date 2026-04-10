@@ -72,6 +72,7 @@ jobs:
             deps
             sequencer_venv
           key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}
+          save-always: true
 
       - name: Setup deps (clone, build prover + runner)
         if: steps.deps-cache.outputs.cache-hit != 'true'
