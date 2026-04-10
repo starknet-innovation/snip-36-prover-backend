@@ -11,7 +11,7 @@ Configuration for the stwo prover. These are suitable for development/testing (l
 | `pcs_config.fri_config.log_blowup_factor` | FRI blowup factor as log2 (1 = 2x blowup) |
 | `pcs_config.fri_config.log_last_layer_degree_bound` | Degree bound for the last FRI layer |
 | `pcs_config.fri_config.n_queries` | Number of FRI queries (more = more secure but larger proof) |
-| `pcs_config.fri_config.line_fold_step` | Line folding step for FRI |
+| `pcs_config.fri_config.fold_step` | Folding step for FRI |
 | `preprocessed_trace` | Preprocessed trace type (`canonical_without_pedersen`) |
 | `include_all_preprocessed_columns` | Include all preprocessed columns in proof |
 | `store_polynomials_coefficients` | Store polynomial coefficients |

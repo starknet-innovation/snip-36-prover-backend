@@ -6,14 +6,7 @@ cairo-version = "2.17.0-rc.4"
 
 [dependencies]
 starknet = ">=2.9.1"
-falcon_account = { path = "../../vendor/s2morrow/packages/falcon_account" }
 
 [[target.starknet-contract]]
 sierra = true
 casm = true
-allowed-libfuncs-list.name = "experimental"
-
-[target-defaults.test]
-build-external-contracts = [
-    "falcon_account::preset::FalconAccount",
-]
