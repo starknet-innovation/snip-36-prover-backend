@@ -71,7 +71,7 @@ impl StarknetRpc {
         let result = self
             .call(
                 "starknet_getBlockWithTxHashes",
-                serde_json::json!({ "block_id": "pending" }),
+                serde_json::json!({ "block_id": "latest" }),
             )
             .await?;
 
