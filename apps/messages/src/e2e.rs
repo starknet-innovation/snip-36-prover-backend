@@ -404,7 +404,12 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     let env_prover_url = std::env::var("PROVER_URL").ok().filter(|s| !s.is_empty());
     let prover_url = args.prover_url.as_deref().or(env_prover_url.as_deref());
 
-    let mut prove_args = vec![
+    let mut prove_args: Vec<String> = Vec::new();
+    if let Some(env_file) = env_file {
+        prove_args.push("--env-file".to_string());
+        prove_args.push(env_file.to_string_lossy().to_string());
+    }
+    prove_args.extend([
         "prove".to_string(),
         "virtual-os".to_string(),
         "--block-number".to_string(),
@@ -415,7 +420,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         config.rpc_url.clone(),
         "--output".to_string(),
         proof_path.to_string_lossy().to_string(),
-    ];
+    ]);
 
     if let Some(url) = prover_url {
         prove_args.push("--prover-url".to_string());

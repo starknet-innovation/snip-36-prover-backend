@@ -3,7 +3,16 @@ name: Daily Sepolia Health Check
 on:
   schedule:
     - cron: '0 8 * * *'  # Daily at 08:00 UTC
-  workflow_dispatch: {}   # Allow manual triggers
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Network to run the E2E tests against'
+        type: choice
+        required: true
+        default: sepolia
+        options:
+          - sepolia
+          - mainnet
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
@@ -80,16 +89,18 @@ jobs:
 
       - name: Run E2E counter test
         env:
-          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
-          STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
-          STARKNET_GATEWAY_URL: ${{ secrets.STARKNET_GATEWAY_URL }}
+          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.STARKNET_RPC_URL }}
+          STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
+          STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
+          STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
+          STARKNET_CHAIN_ID: ${{ inputs.network == 'mainnet' && 'SN_MAIN' || 'SN_SEPOLIA' }}
         run: ./snip36 e2e
 
       - name: Run E2E messages test
         env:
-          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
-          STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
-          STARKNET_GATEWAY_URL: ${{ secrets.STARKNET_GATEWAY_URL }}
+          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.STARKNET_RPC_URL }}
+          STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
+          STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
+          STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
+          STARKNET_CHAIN_ID: ${{ inputs.network == 'mainnet' && 'SN_MAIN' || 'SN_SEPOLIA' }}
         run: ./snip36 e2e-messages

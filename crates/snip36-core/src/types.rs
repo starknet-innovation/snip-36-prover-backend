@@ -18,7 +18,7 @@ pub struct ResourceBounds {
 
 impl ResourceBounds {
     /// Build resource bounds from live gas prices with a 2x safety multiplier.
-    pub fn from_prices(l1_gas_price: u128, l1_data_gas_price: u128) -> Self {
+    pub fn from_prices(l1_gas_price: u128, l1_data_gas_price: u128, l2_gas_price: u128) -> Self {
         Self {
             l1_gas: ResourceBound {
                 max_amount: 0x10000,
@@ -26,7 +26,7 @@ impl ResourceBounds {
             },
             l2_gas: ResourceBound {
                 max_amount: 0x7000000,
-                max_price_per_unit: 0x1dcd65000,
+                max_price_per_unit: l2_gas_price.saturating_mul(2),
             },
             l1_data_gas: ResourceBound {
                 max_amount: 0x1b0,

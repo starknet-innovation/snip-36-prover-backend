@@ -38,6 +38,7 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 ## Prerequisites
 
 - **Rust** — stable (for workspace crates) + `nightly-2025-07-14` (for stwo prover)
+- **scarb** — `2.17.0-rc.4` (Cairo version required by the test contracts)
 - **sncast** (Starknet Foundry) — for contract deployment and invocation
 - **~10 GB disk** — for cloned repos + built binaries
 - **Starknet RPC node** — for state reads during proving
@@ -97,6 +98,7 @@ snip36 setup               # Install all external dependencies
 snip36 e2e                 # Full end-to-end test (counter contract)
 snip36 e2e-messages        # E2E test for L2→L1 messages (messenger contract)
 snip36 e2e-coinflip        # Provable coin flip example (off-chain game)
+snip36 e2e-settlement      # E2E settlement test (deposit → prove → settle → payout)
 snip36 extract             # Extract virtual OS program
 ```
 
@@ -257,8 +259,8 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.2` — Virtual OS runner (zstd-compressed proofs)
-- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `dbc39e7` — stwo-run-and-prove binary
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.3` — Virtual OS runner (zstd-compressed proofs)
+- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `dbc39e74` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) — Circle STARK prover
 - [starknet-crypto](https://crates.io/crates/starknet-crypto) — Poseidon hash, ECDSA signing
 

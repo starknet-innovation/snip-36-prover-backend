@@ -441,7 +441,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         // --- Prove in virtual OS ---
         let proof_path = args.output_dir.join(format!("e2e_{block_idx}.proof"));
 
-        let mut prove_args = vec![
+        let mut prove_args: Vec<String> = Vec::new();
+        if let Some(env_file) = env_file {
+            prove_args.push("--env-file".to_string());
+            prove_args.push(env_file.to_string_lossy().to_string());
+        }
+        prove_args.extend([
             "prove".to_string(),
             "virtual-os".to_string(),
             "--block-number".to_string(),
@@ -452,7 +457,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             config.rpc_url.clone(),
             "--output".to_string(),
             proof_path.to_string_lossy().to_string(),
-        ];
+        ]);
 
         if let Some(url) = prover_url {
             prove_args.push("--prover-url".to_string());

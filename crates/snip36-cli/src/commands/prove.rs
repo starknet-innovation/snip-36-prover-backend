@@ -220,6 +220,23 @@ async fn run_virtual_os(
             );
         }
 
+        // Refuse to start if something else is already listening on our port —
+        // otherwise the client would silently reuse the stale runner and its
+        // chain_id/rpc config, which produces confusing downstream failures
+        // (e.g. `Account: invalid signature` when the stale runner is on a
+        // different chain).
+        if std::net::TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(200),
+        )
+        .is_ok()
+        {
+            bail!(
+                "port {port} is already in use — likely a stale starknet_os_runner from a previous \
+                 run. Kill it (`pkill -f starknet_transaction_prover`) and retry, or pass --port."
+            );
+        }
+
         let mut cmd = tokio::process::Command::new(&runner_bin);
 
         // Run from the sequencer directory so resource files (prover_params.json etc.) are found
@@ -228,7 +245,7 @@ async fn run_virtual_os(
             .arg("--rpc-url")
             .arg(rpc_url)
             .arg("--chain-id")
-            .arg("SN_SEPOLIA")
+            .arg(&config.chain_id)
             .arg("--port")
             .arg(port.to_string())
             .arg("--ip")

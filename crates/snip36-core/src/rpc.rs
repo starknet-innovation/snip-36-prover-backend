@@ -64,10 +64,10 @@ impl StarknetRpc {
             .ok_or_else(|| RpcError::Unexpected(resp.to_string()))
     }
 
-    /// Fetch current L1 gas and L1 data gas prices (in FRI) from the pending block header.
+    /// Fetch current L1, L1-data, and L2 gas prices (in FRI) from the latest block header.
     ///
-    /// Returns `(l1_gas_price, l1_data_gas_price)` as u128.
-    pub async fn get_gas_prices(&self) -> Result<(u128, u128), RpcError> {
+    /// Returns `(l1_gas_price, l1_data_gas_price, l2_gas_price)` as u128.
+    pub async fn get_gas_prices(&self) -> Result<(u128, u128, u128), RpcError> {
         let result = self
             .call(
                 "starknet_getBlockWithTxHashes",
@@ -87,14 +87,18 @@ impl StarknetRpc {
                 .map_err(|e| RpcError::Unexpected(format!("invalid {key} hex '{hex}': {e}")))
         };
 
-        Ok((parse_price("l1_gas_price")?, parse_price("l1_data_gas_price")?))
+        Ok((
+            parse_price("l1_gas_price")?,
+            parse_price("l1_data_gas_price")?,
+            parse_price("l2_gas_price")?,
+        ))
     }
 
     /// Fetch live gas prices and return resource bounds with a 2x safety multiplier.
     pub async fn resource_bounds(&self) -> Result<ResourceBounds, RpcError> {
-        let (l1, l1_data) = self.get_gas_prices().await?;
-        info!("  Live gas prices: l1={l1}, l1_data={l1_data}");
-        Ok(ResourceBounds::from_prices(l1, l1_data))
+        let (l1, l1_data, l2) = self.get_gas_prices().await?;
+        info!("  Live gas prices: l1={l1}, l1_data={l1_data}, l2={l2}");
+        Ok(ResourceBounds::from_prices(l1, l1_data, l2))
     }
 
     /// Get the current block number.
