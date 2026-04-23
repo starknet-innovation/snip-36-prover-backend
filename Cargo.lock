@@ -1881,7 +1881,7 @@ dependencies = [
  "snip36-core",
  "snip36-counter",
  "snip36-messages",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "tempfile",
  "tokio",
  "tracing",
@@ -1907,7 +1907,7 @@ dependencies = [
  "serde_json",
  "snip36-core",
  "snip36-server",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -1927,7 +1927,7 @@ dependencies = [
  "serde",
  "serde_json",
  "starknet-crypto",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1951,7 +1951,7 @@ dependencies = [
  "serde_json",
  "snip36-core",
  "snip36-server",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -1970,7 +1970,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "snip36-core",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "tokio",
  "tracing",
 ]
@@ -2006,7 +2006,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snip36-core",
- "starknet-types-core",
+ "starknet-types-core 1.0.0",
  "tokio",
  "tokio-stream",
  "tower-http",
@@ -2046,7 +2046,7 @@ dependencies = [
  "rfc6979",
  "sha2",
  "starknet-curve",
- "starknet-types-core",
+ "starknet-types-core 0.2.4",
  "zeroize",
 ]
 
@@ -2056,7 +2056,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22c898ae81b6409532374cf237f1bd752d068b96c6ad500af9ebbd0d9bb712f6"
 dependencies = [
- "starknet-types-core",
+ "starknet-types-core 0.2.4",
 ]
 
 [[package]]
@@ -2067,6 +2067,23 @@ checksum = "90d23b1bc014ee4cce40056ab3114bcbcdc2dbc1e845bbfb1f8bd0bab63507d4"
 dependencies = [
  "blake2",
  "digest",
+ "lambdaworks-crypto",
+ "lambdaworks-math",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "rand 0.9.2",
+ "serde",
+ "zeroize",
+]
+
+[[package]]
+name = "starknet-types-core"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a12690813e587969cb4a9e7d8ebdb069d4bb7ec8d03275c5f719310c8e1f07c"
+dependencies = [
+ "generic-array",
  "lambdaworks-crypto",
  "lambdaworks-math",
  "num-bigint",

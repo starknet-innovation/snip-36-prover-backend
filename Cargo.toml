@@ -20,7 +20,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Starknet (only the low-level crates we actually use)
 starknet-crypto = "0.8"
-starknet-types-core = "0.2"
+starknet-types-core = "1.0"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
