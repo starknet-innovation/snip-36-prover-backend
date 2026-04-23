@@ -9,12 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^18.3.1",
+    "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "starknet": "^9.2.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.2.1",
