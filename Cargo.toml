@@ -19,7 +19,9 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Starknet (only the low-level crates we actually use)
-starknet-crypto = "0.8"
+# starknet-rust-crypto is the Software Mansion maintained fork of starknet-crypto
+# (xJonathanLEI's crate has slowed; SM now publishes the starknet-rust-* suite).
+starknet-rust-crypto = "0.19"
 starknet-types-core = "0.2"
 
 # Async runtime

@@ -12,6 +12,6 @@ pub mod signing;
 pub mod types;
 
 pub use config::Config;
-pub use starknet_crypto::pedersen_hash;
-pub use starknet_crypto::poseidon_hash_many;
+pub use starknet_rust_crypto::pedersen_hash;
+pub use starknet_rust_crypto::poseidon_hash_many;
 pub use types::*;

@@ -7,7 +7,7 @@
 //! Standard SDKs (starknet-py, starknet.js) do NOT include proof_facts — this
 //! module is the canonical Rust implementation of the SNIP-36 hash extension.
 
-use starknet_crypto::poseidon_hash_many;
+use starknet_rust_crypto::poseidon_hash_many;
 use starknet_types_core::felt::Felt;
 
 use crate::types::ResourceBounds;
@@ -150,8 +150,8 @@ pub struct Signature {
 /// Uses RFC-6979 deterministic nonce generation to avoid nonce reuse,
 /// which would leak the private key.
 pub fn sign(private_key: Felt, message_hash: Felt) -> Result<Signature, SignError> {
-    let k = starknet_crypto::rfc6979_generate_k(&message_hash, &private_key, None);
-    let sig = starknet_crypto::sign(&private_key, &message_hash, &k)
+    let k = starknet_rust_crypto::rfc6979_generate_k(&message_hash, &private_key, None);
+    let sig = starknet_rust_crypto::sign(&private_key, &message_hash, &k)
         .map_err(|e| SignError::Ecdsa(e.to_string()))?;
     Ok(Signature { r: sig.r, s: sig.s })
 }

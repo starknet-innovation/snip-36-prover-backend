@@ -9,7 +9,7 @@ description = "Core library for SNIP-36 virtual block proving — types, config,
 cli = ["dep:regex-lite"]
 
 [dependencies]
-starknet-crypto = { workspace = true }
+starknet-rust-crypto = { workspace = true }
 starknet-types-core = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
