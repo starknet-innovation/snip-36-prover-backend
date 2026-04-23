@@ -15,6 +15,13 @@ on:
           - sepolia
           - mainnet
 
+# Serialize all runs so they don't race on the shared sepolia account's nonce.
+# Runs from PRs, schedule, and workflow_dispatch all share one queue; nothing
+# is cancelled so each run gets to complete.
+concurrency:
+  group: sepolia-e2e-account
+  cancel-in-progress: false
+
 # Version pins — bump these to force a rebuild of cached deps.
 env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
