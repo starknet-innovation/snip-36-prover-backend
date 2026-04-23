@@ -36,6 +36,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             private_key: String::new(),
             chain_id: "SN_SEPOLIA".into(),
             gateway_url: None,
+            strk_token: snip36_core::types::STRK_TOKEN.to_string(),
             output_dir: project_dir.join("output"),
             deps_dir: project_dir.join("deps"),
             project_dir,

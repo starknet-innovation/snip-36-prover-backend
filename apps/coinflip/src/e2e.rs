@@ -14,7 +14,7 @@ use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
 use crate::selectors::PLAY_SELECTOR;
-use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
 use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
@@ -439,7 +439,7 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
         prove_args.push(url.to_string());
     } else {
         prove_args.push("--strk-fee-token".to_string());
-        prove_args.push(STRK_TOKEN.to_string());
+        prove_args.push(config.strk_token.clone());
     }
 
     let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));

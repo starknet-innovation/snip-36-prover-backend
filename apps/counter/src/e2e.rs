@@ -12,7 +12,7 @@ use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
 use crate::selectors::{GET_COUNTER_SELECTOR, INCREMENT_SELECTOR};
@@ -465,7 +465,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             prove_args.push(url.to_string());
         } else {
             prove_args.push("--strk-fee-token".to_string());
-            prove_args.push(STRK_TOKEN.to_string());
+            prove_args.push(config.strk_token.clone());
         }
 
         let prove_status = tokio::process::Command::new(&current_exe)

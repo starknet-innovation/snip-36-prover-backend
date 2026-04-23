@@ -13,6 +13,8 @@ pub struct Config {
     pub chain_id: String,
     /// Gateway URL for proof submission (bypasses RPC node).
     pub gateway_url: Option<String>,
+    /// STRK fee-token address (chain-specific; devnet uses a different address than sepolia/mainnet).
+    pub strk_token: String,
     /// Project root directory.
     pub project_dir: PathBuf,
     /// Output directory for proofs and artifacts.
@@ -47,6 +49,10 @@ impl Config {
         let gateway_url = std::env::var("STARKNET_GATEWAY_URL")
             .ok()
             .filter(|s| !s.is_empty());
+        let strk_token = std::env::var("STARKNET_STRK_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| crate::types::STRK_TOKEN.to_string());
 
         let project_dir = std::env::var("SNIP36_PROJECT_DIR")
             .map(PathBuf::from)
@@ -62,6 +68,7 @@ impl Config {
             private_key,
             chain_id,
             gateway_url,
+            strk_token,
             project_dir,
             output_dir,
             deps_dir,

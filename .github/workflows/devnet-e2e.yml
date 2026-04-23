@@ -1,0 +1,92 @@
+name: Devnet E2E Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
+  PROVING_UTILS_REV: dbc39e74
+  STWO_NIGHTLY: nightly-2025-07-14
+  DEVNET_VERSION: "0.5.1"
+
+jobs:
+  devnet-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build snip36 CLI
+        run: cargo build --release -p snip36-cli
+
+      - name: Install starknet-foundry (sncast)
+        shell: bash
+        run: |
+          curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
+          source "$HOME/.bashrc" 2>/dev/null || true
+          export PATH="$HOME/.local/bin:$HOME/.starknet-foundry/bin:$PATH"
+          snfoundryup
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.starknet-foundry/bin" >> "$GITHUB_PATH"
+
+      - name: Install scarb
+        uses: software-mansion/setup-scarb@v1
+        with:
+          scarb-version: "2.17.0-rc.4"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache starknet-devnet binary
+        id: devnet-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/starknet-devnet
+          key: ${{ runner.os }}-starknet-devnet-${{ env.DEVNET_VERSION }}
+
+      - name: Install starknet-devnet
+        if: steps.devnet-cache.outputs.cache-hit != 'true'
+        run: cargo install starknet-devnet --locked --version ${{ env.DEVNET_VERSION }}
+
+      - name: Verify tools
+        run: |
+          ./snip36 --help
+          sncast --version
+          scarb --version
+          python3 --version
+          starknet-devnet --version
+
+      - name: Cache prebuilt deps
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            sequencer_venv
+          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}
+
+      - name: Setup deps (clone, build prover + runner)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ./snip36 setup
+
+      - name: Run devnet E2E suite
+        run: ./snip36 e2e-devnet

@@ -13,7 +13,7 @@ use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
 use crate::selectors::SEND_MESSAGE_SELECTOR;
-use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
 use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
@@ -77,23 +77,23 @@ fn format_duration(d: std::time::Duration) -> String {
 pub struct E2eMessagesArgs {
     /// Remote prover URL (skip local starknet_os_runner)
     #[arg(long)]
-    prover_url: Option<String>,
+    pub prover_url: Option<String>,
 
     /// Output directory for E2E artifacts
     #[arg(long, default_value = "output/e2e-messages")]
-    output_dir: PathBuf,
+    pub output_dir: PathBuf,
 
     /// Stop after proving — save proof and artifacts locally without submitting
     #[arg(long)]
-    prove_only: bool,
+    pub prove_only: bool,
 
     /// L1 address to send the message to (hex)
     #[arg(long, default_value = "0x123")]
-    to_address: String,
+    pub to_address: String,
 
     /// Payload felts to send (hex, comma-separated)
     #[arg(long, default_value = "0x1,0x2,0x3")]
-    payload: String,
+    pub payload: String,
 }
 
 pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -427,7 +427,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         prove_args.push(url.to_string());
     } else {
         prove_args.push("--strk-fee-token".to_string());
-        prove_args.push(STRK_TOKEN.to_string());
+        prove_args.push(config.strk_token.clone());
     }
 
     let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));
