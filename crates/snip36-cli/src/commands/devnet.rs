@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{bail, Result, WrapErr};
 use serde_json::Value;
 use tokio::process::{Child, Command};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Handle to a running starknet-devnet process.
 ///
@@ -81,27 +81,11 @@ pub async fn spawn(bin: &str, port: u16, seed: u64) -> Result<DevnetHandle> {
 
 /// Poll `starknet_chainId` until it succeeds or we hit `timeout`.
 async fn wait_for_ready(url: &str, timeout: Duration) -> Result<()> {
-    let client = reqwest::Client::new();
     let deadline = Instant::now() + timeout;
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "starknet_chainId",
-        "params": [],
-        "id": 1,
-    });
-
     let mut last_err: Option<String> = None;
     while Instant::now() < deadline {
-        match client.post(url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(v) = resp.json::<Value>().await {
-                    if v.get("result").is_some() {
-                        return Ok(());
-                    }
-                    last_err = Some(format!("RPC responded but no result: {v}"));
-                }
-            }
-            Ok(resp) => last_err = Some(format!("HTTP {}", resp.status())),
+        match rpc_call(url, "starknet_chainId", serde_json::json!([])).await {
+            Ok(_) => return Ok(()),
             Err(e) => last_err = Some(format!("{e}")),
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -120,22 +104,10 @@ pub struct PredeployedAccount {
     pub private_key: String,
 }
 
-/// Fetch the first predeployed account. Devnet exposes this at `GET /predeployed_accounts`.
+/// Fetch the first predeployed account via devnet's JSON-RPC `devnet_getPredeployedAccounts`.
 pub async fn fetch_predeployed_account(url: &str) -> Result<PredeployedAccount> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{url}/predeployed_accounts"))
-        .send()
-        .await
-        .wrap_err("failed to GET /predeployed_accounts")?;
-    if !resp.status().is_success() {
-        bail!("devnet /predeployed_accounts returned HTTP {}", resp.status());
-    }
-    let accounts: Value = resp
-        .json()
-        .await
-        .wrap_err("invalid JSON from /predeployed_accounts")?;
-    let first = accounts
+    let resp = rpc_call(url, "devnet_getPredeployedAccounts", serde_json::json!([])).await?;
+    let first = resp
         .as_array()
         .and_then(|a| a.first())
         .ok_or_else(|| color_eyre::eyre::eyre!("devnet returned no predeployed accounts"))?;
@@ -155,47 +127,23 @@ pub async fn fetch_predeployed_account(url: &str) -> Result<PredeployedAccount> 
     })
 }
 
-/// STRK fee-token address used by devnet.
-///
-/// Devnet exposes its config (including the ERC20 token addresses) at `GET /config`.
-/// The field name has changed across versions; we try a few known variants and
-/// return None if none match — callers can then fall back to a default.
-pub async fn fetch_strk_address(url: &str) -> Result<Option<String>> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{url}/config"))
-        .send()
-        .await
-        .wrap_err("failed to GET /config")?;
-    if !resp.status().is_success() {
-        warn!("  devnet /config returned HTTP {}", resp.status());
-        return Ok(None);
-    }
-    let cfg: Value = resp.json().await.wrap_err("invalid JSON from /config")?;
-    let candidates = [
-        "strk_erc20_contract_address",
-        "strk_erc20_address",
-        "strk_contract_address",
-        "strk_fee_token_address",
-    ];
-    for key in candidates {
-        if let Some(addr) = cfg.get(key).and_then(Value::as_str) {
-            return Ok(Some(addr.to_string()));
-        }
-    }
-    warn!(
-        "  devnet /config did not contain a known STRK address field (tried {candidates:?}); falling back to sepolia default"
-    );
-    Ok(None)
-}
-
 /// Chain id reported by devnet, decoded from the short-string felt.
 pub async fn fetch_chain_id(url: &str) -> Result<String> {
+    let result = rpc_call(url, "starknet_chainId", serde_json::json!([])).await?;
+    let hex = result
+        .as_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("starknet_chainId returned non-string: {result}"))?;
+    Ok(decode_short_string(hex))
+}
+
+/// Tiny JSON-RPC helper. Returns the `result` field of the response, or an error
+/// describing the HTTP/JSON-RPC failure.
+async fn rpc_call(url: &str, method: &str, params: Value) -> Result<Value> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "jsonrpc": "2.0",
-        "method": "starknet_chainId",
-        "params": [],
+        "method": method,
+        "params": params,
         "id": 1,
     });
     let resp: Value = client
@@ -203,15 +151,16 @@ pub async fn fetch_chain_id(url: &str) -> Result<String> {
         .json(&body)
         .send()
         .await
-        .wrap_err("failed to call starknet_chainId")?
+        .wrap_err_with(|| format!("failed to call {method}"))?
         .json()
         .await
-        .wrap_err("invalid JSON from starknet_chainId")?;
-    let hex = resp
-        .get("result")
-        .and_then(Value::as_str)
-        .ok_or_else(|| color_eyre::eyre::eyre!("no chain_id result: {resp}"))?;
-    Ok(decode_short_string(hex))
+        .wrap_err_with(|| format!("invalid JSON from {method}"))?;
+    if let Some(err) = resp.get("error") {
+        bail!("{method} returned JSON-RPC error: {err}");
+    }
+    resp.get("result")
+        .cloned()
+        .ok_or_else(|| color_eyre::eyre::eyre!("{method} returned no result: {resp}"))
 }
 
 /// Decode a hex-encoded Starknet short string (e.g. "0x534e5f5345504f4c4941" → "SN_SEPOLIA").

@@ -10,7 +10,7 @@ env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
   PROVING_UTILS_REV: dbc39e74
   STWO_NIGHTLY: nightly-2025-07-14
-  DEVNET_VERSION: "0.5.1"
+  DEVNET_VERSION: "0.8.1"
 
 jobs:
   devnet-e2e:
@@ -60,12 +60,23 @@ jobs:
         id: devnet-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/starknet-devnet
+          path: ~/.local/bin/starknet-devnet
           key: ${{ runner.os }}-starknet-devnet-${{ env.DEVNET_VERSION }}
 
       - name: Install starknet-devnet
         if: steps.devnet-cache.outputs.cache-hit != 'true'
-        run: cargo install starknet-devnet --locked --version ${{ env.DEVNET_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          asset="starknet-devnet-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/0xSpaceShard/starknet-devnet/releases/download/v${DEVNET_VERSION}/${asset}"
+          curl -fsSL "$url" -o /tmp/devnet.tar.gz
+          tar -xzf /tmp/devnet.tar.gz -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/starknet-devnet"
+
+      - name: Expose starknet-devnet on PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Verify tools
         run: |

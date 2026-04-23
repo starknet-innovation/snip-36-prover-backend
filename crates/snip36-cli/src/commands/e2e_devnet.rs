@@ -57,21 +57,15 @@ pub async fn run(args: E2eDevnetArgs, _env_file: Option<&std::path::Path>) -> Re
     let chain_id = devnet::fetch_chain_id(&url).await?;
     info!("  Chain id: {chain_id}");
 
-    let strk_token = devnet::fetch_strk_address(&url).await?;
-    if let Some(ref t) = strk_token {
-        info!("  STRK token (from devnet): {t}");
-    } else {
-        info!("  STRK token: using sepolia default (devnet /config didn't advertise one)");
-    }
+    // starknet-devnet predeploys STRK at the canonical mainnet/sepolia address,
+    // which matches Config::strk_token's default, so no STARKNET_STRK_TOKEN override
+    // is needed here.
 
     // Inject config via env vars so each flow's Config::from_env picks them up.
     std::env::set_var("STARKNET_RPC_URL", &url);
     std::env::set_var("STARKNET_ACCOUNT_ADDRESS", &account.address);
     std::env::set_var("STARKNET_PRIVATE_KEY", &account.private_key);
     std::env::set_var("STARKNET_CHAIN_ID", &chain_id);
-    if let Some(ref t) = strk_token {
-        std::env::set_var("STARKNET_STRK_TOKEN", t);
-    }
     // Ensure submission goes through RPC, not a gateway.
     std::env::remove_var("STARKNET_GATEWAY_URL");
 
