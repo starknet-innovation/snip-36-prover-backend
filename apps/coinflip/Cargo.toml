@@ -25,5 +25,5 @@ regex-lite = "0.1"
 dashmap = "6"
 uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
-indicatif = "0.17"
+indicatif = "0.18"
 tempfile = "3"

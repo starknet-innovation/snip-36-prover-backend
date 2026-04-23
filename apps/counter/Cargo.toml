@@ -23,5 +23,5 @@ axum = { version = "0.8", features = ["macros"] }
 tokio-stream = "0.1"
 regex-lite = "0.1"
 clap = { version = "4", features = ["derive"] }
-indicatif = "0.17"
+indicatif = "0.18"
 tempfile = "3"
