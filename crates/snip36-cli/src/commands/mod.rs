@@ -1,6 +1,4 @@
 pub mod deploy;
-pub mod devnet;
-pub mod e2e_devnet;
 pub mod extract;
 pub mod fund;
 pub mod prove;

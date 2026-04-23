@@ -49,8 +49,6 @@ enum Commands {
     E2eCoinflip(snip36_coinflip::e2e::E2eCoinflipArgs),
     /// E2E settlement test (full deposit → prove → settle → payout)
     E2eSettlement(snip36_coinflip::e2e_settlement::E2eSettlementArgs),
-    /// E2E suite against a locally-spawned starknet-devnet
-    E2eDevnet(commands::e2e_devnet::E2eDevnetArgs),
 }
 
 #[tokio::main]
@@ -85,6 +83,5 @@ async fn main() -> Result<()> {
         Commands::E2eMessages(args) => snip36_messages::e2e::run(args, env_file).await,
         Commands::E2eCoinflip(args) => snip36_coinflip::e2e::run(args, env_file).await,
         Commands::E2eSettlement(args) => snip36_coinflip::e2e_settlement::run(args, env_file).await,
-        Commands::E2eDevnet(args) => commands::e2e_devnet::run(args, env_file).await,
     }
 }

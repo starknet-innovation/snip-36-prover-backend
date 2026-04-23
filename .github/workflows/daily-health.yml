@@ -3,6 +3,7 @@ name: Daily Sepolia Health Check
 on:
   schedule:
     - cron: '0 8 * * *'  # Daily at 08:00 UTC
+  pull_request:
   workflow_dispatch:
     inputs:
       network:
