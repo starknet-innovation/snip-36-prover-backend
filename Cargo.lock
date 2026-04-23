@@ -1100,16 +1100,42 @@ dependencies = [
 
 [[package]]
 name = "lambdaworks-crypto"
-version = "0.13.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b1a1c1102a5a7fbbda117b79fb3a01e033459c738a3c1642269603484fd1c1"
+checksum = "fce8f59622ed408c318c9b5eca17f1a1154159e3738b5c4d5a22a0dd3700c906"
 dependencies = [
- "lambdaworks-math",
+ "lambdaworks-math 0.12.0",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
  "sha2",
  "sha3",
+]
+
+[[package]]
+name = "lambdaworks-crypto"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b1a1c1102a5a7fbbda117b79fb3a01e033459c738a3c1642269603484fd1c1"
+dependencies = [
+ "lambdaworks-math 0.13.0",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "serde",
+ "sha2",
+ "sha3",
+]
+
+[[package]]
+name = "lambdaworks-math"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "405d65a26831650ba348a503a2881ed7a0483ef3ec17f66e0fc8e2f9c97fc7ca"
+dependencies = [
+ "getrandom 0.2.17",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1913,7 +1939,7 @@ dependencies = [
  "snip36-core",
  "snip36-counter",
  "snip36-messages",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "tempfile",
  "tokio",
  "tracing",
@@ -1939,7 +1965,7 @@ dependencies = [
  "serde_json",
  "snip36-core",
  "snip36-server",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -1959,7 +1985,7 @@ dependencies = [
  "serde",
  "serde_json",
  "starknet-rust-crypto",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1983,7 +2009,7 @@ dependencies = [
  "serde_json",
  "snip36-core",
  "snip36-server",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -2002,7 +2028,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "snip36-core",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "tokio",
  "tracing",
 ]
@@ -2038,7 +2064,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snip36-core",
- "starknet-types-core",
+ "starknet-types-core 0.3.0",
  "tokio",
  "tokio-stream",
  "tower-http",
@@ -2080,7 +2106,7 @@ dependencies = [
  "rfc6979",
  "sha2",
  "starknet-rust-curve",
- "starknet-types-core",
+ "starknet-types-core 0.2.4",
  "zeroize",
 ]
 
@@ -2090,7 +2116,7 @@ version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ee2272de9f1fd3c41c32238500fab9c377571e706db87e1d96d60379536cd7d"
 dependencies = [
- "starknet-types-core",
+ "starknet-types-core 0.2.4",
 ]
 
 [[package]]
@@ -2101,8 +2127,24 @@ checksum = "90d23b1bc014ee4cce40056ab3114bcbcdc2dbc1e845bbfb1f8bd0bab63507d4"
 dependencies = [
  "blake2",
  "digest",
- "lambdaworks-crypto",
- "lambdaworks-math",
+ "lambdaworks-crypto 0.13.0",
+ "lambdaworks-math 0.13.0",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "rand 0.9.2",
+ "serde",
+ "zeroize",
+]
+
+[[package]]
+name = "starknet-types-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63348f4e18f318045f7d1bfddac8b99618dc1005c89ebc71ae82593b76fd3ade"
+dependencies = [
+ "lambdaworks-crypto 0.12.0",
+ "lambdaworks-math 0.12.0",
  "num-bigint",
  "num-integer",
  "num-traits",
