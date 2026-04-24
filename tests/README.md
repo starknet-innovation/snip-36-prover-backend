@@ -46,6 +46,17 @@ With options:
 ./snip36 e2e --prover-url http://remote:9900 --snos-blocks 3 --counter-increments 5
 ```
 
+Bad-proof rejection test:
+
+```bash
+./snip36 e2e --bad-proof
+```
+
+This deploys a fresh counter, generates a real SNIP-36 proof for `increment(1)`,
+corrupts the proof bytes before submission, and passes only if the network
+rejects the proof-bearing transaction and the counter remains unchanged. This
+mode currently runs a single SNOS block.
+
 ## Files
 
 | File | Description |
@@ -67,6 +78,8 @@ The E2E orchestrator and all supporting logic (tx signing, proof submission, tx 
 
 ```
 snip36 e2e          Full end-to-end test
+snip36 e2e --bad-proof
+                    Negative E2E: submit corrupted proof and verify no state change
 snip36 prove        Run virtual OS + stwo prover
 snip36 submit       Sign and submit proof via RPC
 snip36 deploy       Deploy contracts via sncast

@@ -8,7 +8,7 @@ use color_eyre::eyre::{bail, Result, WrapErr};
 use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
-use snip36_core::rpc::StarknetRpc;
+use snip36_core::rpc::{RpcError, StarknetRpc};
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
@@ -94,6 +94,23 @@ fn encode_account_calls(calls: Vec<(String, String, Vec<String>)>) -> Vec<String
     calldata
 }
 
+fn is_retriable_submission_message(msg: &str) -> bool {
+    msg.contains("too recent") || msg.contains("stored block hash: 0")
+}
+
+fn corrupt_base64_proof(proof_base64: &str) -> Result<String> {
+    let mut bytes = proof_base64.trim().as_bytes().to_vec();
+    let Some(pos) = bytes
+        .iter()
+        .position(|b| b.is_ascii_alphanumeric() || matches!(*b, b'+' | b'/'))
+    else {
+        bail!("proof does not contain any base64 payload bytes to corrupt");
+    };
+
+    bytes[pos] = if bytes[pos] == b'A' { b'B' } else { b'A' };
+    String::from_utf8(bytes).wrap_err("corrupted proof is not valid UTF-8")
+}
+
 #[derive(Args)]
 pub struct E2eArgs {
     /// Remote prover URL (skip local starknet_os_runner)
@@ -119,12 +136,20 @@ pub struct E2eArgs {
     /// Stop after proving -- save proof and proof_facts locally without submitting via RPC
     #[arg(long)]
     pub prove_only: bool,
+
+    /// Submit a corrupted proof and verify the network rejects it without changing the counter
+    #[arg(long, conflicts_with = "prove_only")]
+    pub bad_proof: bool,
 }
 
 pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()> {
     let config = Config::from_env(env_file)?;
     let env_prover_url = std::env::var("PROVER_URL").ok().filter(|s| !s.is_empty());
     let prover_url = args.prover_url.as_deref().or(env_prover_url.as_deref());
+
+    if args.bad_proof && args.snos_blocks != 1 {
+        bail!("--bad-proof currently supports exactly one SNOS block; pass --snos-blocks 1");
+    }
 
     // Reset counters
     PASS_COUNT.store(0, Ordering::Relaxed);
@@ -141,16 +166,32 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let account_name = e2e_account_name(&config.account_address);
 
     let increment_per_block = args.counter_increments * args.increments_per_snos as u64;
-    let total_expected = increment_per_block * args.snos_blocks as u64;
+    let total_good_increment = increment_per_block * args.snos_blocks as u64;
+    let total_expected = if args.bad_proof {
+        0
+    } else {
+        total_good_increment
+    };
 
     info!("=== SNIP-36 End-to-End Test ===");
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
-    info!(
-        "  Blocks:  {} x {} calls x increment({}) = +{} total",
-        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected
-    );
+    if args.bad_proof {
+        info!(
+            "  Blocks:  {} x {} calls x increment({}) = +{} if valid",
+            args.snos_blocks,
+            args.increments_per_snos,
+            args.counter_increments,
+            total_good_increment
+        );
+        info!("  Mode:    bad proof rejection (counter must remain unchanged)");
+    } else {
+        info!(
+            "  Blocks:  {} x {} calls x increment({}) = +{} total",
+            args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected
+        );
+    }
     info!("");
 
     // Check prerequisites
@@ -505,7 +546,19 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
 
         // --- Submit via RPC ---
         let proof_facts_file = proof_path.with_extension("proof_facts");
-        let proof_b64_trimmed = proof_b64.trim().to_string();
+        let mut proof_b64_trimmed = proof_b64.trim().to_string();
+        if args.bad_proof {
+            proof_b64_trimmed = corrupt_base64_proof(&proof_b64_trimmed)?;
+            let bad_proof_path = proof_path.with_extension("bad.proof");
+            tokio::fs::write(&bad_proof_path, &proof_b64_trimmed)
+                .await
+                .wrap_err("failed to write corrupted proof artifact")?;
+            info!(
+                "  Corrupted proof saved for negative submission: {}",
+                bad_proof_path.display()
+            );
+        }
+
         let proof_facts_str = tokio::fs::read_to_string(&proof_facts_file)
             .await
             .wrap_err("failed to read proof_facts")?;
@@ -533,6 +586,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
 
         let max_attempts = 20;
         let mut accepted_tx_hash: Option<String> = None;
+        let mut rejected_bad_proof: Option<String> = None;
         let fails_before = FAIL_COUNT.load(Ordering::Relaxed);
 
         if let Some(ref gw_url) = config.gateway_url {
@@ -573,12 +627,13 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                             ));
                             accepted_tx_hash = Some(local_tx_hash_hex.clone());
                             break;
-                        } else if (msg.contains("too recent")
-                            || msg.contains("stored block hash: 0"))
-                            && attempt < max_attempts
-                        {
+                        } else if is_retriable_submission_message(msg) && attempt < max_attempts {
                             info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
                             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        } else if args.bad_proof {
+                            pass(&format!("Gateway rejected bad proof as expected: {body}"));
+                            rejected_bad_proof = Some(body.to_string());
+                            break;
                         } else {
                             fail(&format!("Gateway rejected: {body}"));
                             break;
@@ -608,7 +663,22 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                         accepted_tx_hash = Some(hash);
                         break;
                     }
-                    Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
+                    Err(RpcError::JsonRpc(msg))
+                        if args.bad_proof
+                            && is_retriable_submission_message(&msg)
+                            && attempt < max_attempts =>
+                    {
+                        info!(
+                            "  Attempt {attempt}/{max_attempts}: RPC not ready, waiting 10s... ({msg})"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    }
+                    Err(RpcError::JsonRpc(msg)) if args.bad_proof => {
+                        pass(&format!("RPC rejected bad proof as expected: {msg}"));
+                        rejected_bad_proof = Some(msg);
+                        break;
+                    }
+                    Err(RpcError::JsonRpc(msg)) if attempt < max_attempts => {
                         info!(
                             "  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})"
                         );
@@ -620,6 +690,66 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                     }
                 }
             }
+        }
+
+        if args.bad_proof {
+            if let Some(rpc_tx_hash) = accepted_tx_hash {
+                info!("  Bad-proof tx accepted into the network: {rpc_tx_hash}");
+                info!("  Waiting for rejected receipt...");
+
+                match rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
+                    Err(RpcError::TxRejected(receipt)) => {
+                        pass(&format!(
+                            "Bad-proof tx was rejected during execution: {}",
+                            receipt.get(..receipt.len().min(500)).unwrap_or(&receipt)
+                        ));
+                    }
+                    Err(e) => {
+                        fail(&format!(
+                            "Bad-proof tx did not produce expected rejection: {e}"
+                        ));
+                        bail!("bad proof tx confirmation failed for block {block_idx}");
+                    }
+                    Ok(receipt) => {
+                        let receipt_text = receipt.to_string();
+                        fail(&format!(
+                            "Bad-proof tx succeeded unexpectedly: {}",
+                            receipt_text.get(..500).unwrap_or(&receipt_text)
+                        ));
+                        bail!("bad proof was accepted as valid for block {block_idx}");
+                    }
+                }
+            } else if rejected_bad_proof.is_none() {
+                if FAIL_COUNT.load(Ordering::Relaxed) == fails_before {
+                    fail("Bad-proof submission was neither accepted nor explicitly rejected");
+                }
+                bail!(
+                    "bad proof submission had no terminal network response for block {block_idx}"
+                );
+            }
+
+            let counter_after = read_counter(&rpc, &contract_address).await;
+            let expected = initial_counter + increment_per_block * (block_idx - 1) as u64;
+
+            match counter_after {
+                Some(actual) if actual == expected => {
+                    pass(&format!(
+                        "Counter unchanged after bad proof: {actual} (expected {expected})"
+                    ));
+                }
+                Some(actual) => {
+                    fail(&format!(
+                        "Counter changed after bad proof: got {actual}, expected {expected}"
+                    ));
+                    bail!("bad proof changed counter for block {block_idx}");
+                }
+                None => {
+                    fail("Could not read counter value after bad proof");
+                    bail!("counter read failed after bad proof for block {block_idx}");
+                }
+            }
+
+            continue;
         }
 
         let Some(rpc_tx_hash) = accepted_tx_hash else {
@@ -677,6 +807,26 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             args.snos_blocks,
             args.output_dir.display()
         ));
+    } else if args.bad_proof {
+        step(5 + args.snos_blocks, "Final bad-proof verification");
+
+        let final_counter = read_counter(&rpc, &contract_address).await;
+
+        match final_counter {
+            Some(actual) if actual == initial_counter => {
+                pass(&format!(
+                    "Bad proof rejected: counter stayed at {actual} (initial {initial_counter})"
+                ));
+            }
+            Some(actual) => {
+                fail(&format!(
+                    "Final counter mismatch after bad proof: got {actual}, expected {initial_counter}"
+                ));
+            }
+            None => {
+                fail("Could not read final counter");
+            }
+        }
     } else {
         step(5 + args.snos_blocks, "Final verification");
 
