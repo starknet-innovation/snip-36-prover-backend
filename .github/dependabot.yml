@@ -11,11 +11,11 @@ updates:
           - minor
           - patch
     ignore:
-      # starknet-crypto 0.8.x still depends on starknet-types-core 0.2.x, so bumping
-      # starknet-types-core to 1.x produces two incompatible Felt types in the build.
-      # Revisit once starknet-crypto publishes a release compatible with 1.x.
+      # starknet-rust-crypto 0.19 pins starknet-types-core =0.2.4, so any bump past
+      # 0.2.x produces two incompatible Felt types at build time (12 compile errors).
+      # Revisit once starknet-rust-crypto publishes a release that bumps its pin.
       - dependency-name: "starknet-types-core"
-        versions: [">=1.0.0"]
+        versions: [">=0.3.0"]
 
   - package-ecosystem: github-actions
     directory: "/"
