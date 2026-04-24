@@ -46,5 +46,5 @@ eyre = "0.6"
 # Misc
 base64 = "0.22"
 dotenvy = "0.15"
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
