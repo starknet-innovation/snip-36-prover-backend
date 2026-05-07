@@ -1,0 +1,55 @@
+name: Rerun cancelled e2e-test
+
+# Reruns Daily Sepolia Health Check runs that were cancelled by the
+# concurrency-group queue (sepolia-e2e-account). When Dependabot opens a burst
+# of PRs, GitHub Actions only allows one running + one pending run per group
+# and evicts older pending runs as cancelled, leaving PRs blocked on the
+# required e2e-test check. This workflow waits for the queue to drain and
+# then re-triggers the cancelled run.
+
+on:
+  workflow_run:
+    workflows: ["Daily Sepolia Health Check"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  rerun:
+    if: >
+      github.event.workflow_run.conclusion == 'cancelled' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify cancellation was queue eviction (no jobs ever ran)
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Queue-evicted runs are cancelled while still queued — no step ever
+          # transitions to success or failure. Any other cancellation (manual,
+          # push-cancel, real failure) will have at least one executed step.
+          EXECUTED=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs" \
+            --jq '[.jobs[].steps[]?.conclusion | select(. == "success" or . == "failure")] | length')
+          echo "Executed steps: $EXECUTED"
+          if [ "$EXECUTED" -gt 0 ]; then
+            echo "Not a queue eviction — skipping rerun."
+            echo "rerun=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rerun=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for concurrency queue to drain
+        if: steps.check.outputs.rerun == 'true'
+        run: sleep 180
+
+      - name: Rerun cancelled run
+        if: steps.check.outputs.rerun == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run rerun ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }}
