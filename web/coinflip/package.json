@@ -12,7 +12,7 @@
   "dependencies": {
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "starknet": "^9.2.1",
+    "starknet": "^10.0.2",
     "get-starknet-core": "^4.0.0"
   },
   "devDependencies": {
