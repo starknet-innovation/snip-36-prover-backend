@@ -15,6 +15,9 @@ on:
           - sepolia
           - mainnet
 
+permissions:
+  contents: read
+
 # Serialize all runs so they don't race on the shared sepolia account's nonce.
 # Runs from PRs, schedule, and workflow_dispatch all share one queue; nothing
 # is cancelled so each run gets to complete.
