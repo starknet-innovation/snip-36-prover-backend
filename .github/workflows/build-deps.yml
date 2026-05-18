@@ -16,6 +16,9 @@ on:
         required: true
         default: 'deps-v1'
 
+permissions:
+  contents: read
+
 env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
   PROVING_UTILS_REV: main
