@@ -100,7 +100,7 @@ jobs:
 
       - name: Run E2E counter test
         env:
-          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.STARKNET_RPC_URL }}
+          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
           STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
@@ -109,7 +109,7 @@ jobs:
 
       - name: Run E2E messages test
         env:
-          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.STARKNET_RPC_URL }}
+          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
           STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
