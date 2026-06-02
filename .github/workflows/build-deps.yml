@@ -51,6 +51,18 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-deps-cargo-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}
 
+      - name: Cache build targets
+        uses: actions/cache@v5
+        with:
+          path: |
+            target
+            deps/proving-utils/target
+            deps/sequencer/target
+          key: ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ hashFiles('Cargo.lock', 'vendor/proving-utils.Cargo.lock', 'crates/snip36-cli/src/commands/setup.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-
+            ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
