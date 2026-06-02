@@ -2,7 +2,7 @@
 name = "virtual-os-extractor"
 # Excluded from the workspace (needs deps/sequencer/), so it can't inherit
 # workspace.package — keep this in step with the workspace version manually.
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 description = "Extracts the compiled virtual OS program from apollo_starknet_os_program"
 
