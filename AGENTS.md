@@ -78,16 +78,44 @@ cargo run --release -p snip36-playground
 cd web/frontend && npm install && npm run dev
 ```
 
-## Testing
+## Verifying a change
+
+Work down this ladder — most changes can be validated entirely at the cheap,
+offline tiers. Prefer adding an offline unit test over relying on the on-chain
+e2e.
+
+**Tier 1 — fast, offline, no secrets (run these first; this is what CI gates on):**
 
 ```bash
-cargo test --workspace           # Unit tests
-snip36 health                    # Sepolia health check (needs RPC)
-snip36 e2e                       # Full E2E: execute → prove → sign → submit
-snip36 e2e-messages              # E2E for L2→L1 messages: deploy Messenger → prove → verify raw_messages.json
-snip36 e2e-coinflip              # Provable coin flip: deploy CoinFlip → prove → verify settlement message
-snip36 e2e-settlement            # Full settlement: deposit → prove → settle → payout
+cargo build --workspace --all-features    # --all-features builds the `cli`-gated code
+cargo test  --workspace --all-features    # unit tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
 ```
+
+Tier 1 covers the pure logic: SNIP-36 tx-hash + signing (`snip36-core::signing`),
+proof encoding / `proof_facts` parsing (`snip36-core::proof`), resource-bound
+JSON (`snip36-core::types`), sncast-output parsing (`snip36-core::cli_util`,
+behind the `cli` feature → needs `--all-features`), and the coin-flip outcome
+math (`apps/coinflip/src/outcome.rs`). If you change any of these, add/extend a
+test here.
+
+**Tier 2 — on-chain e2e (needs secrets + external deps; NOT runnable in a sandbox):**
+
+```bash
+snip36 health          # Sepolia health check (needs RPC)
+snip36 e2e             # full flow: execute → prove → sign → submit
+snip36 e2e-messages    # L2→L1 messages: deploy Messenger → prove → verify raw_messages.json
+snip36 e2e-coinflip    # provable coin flip: deploy CoinFlip → prove → verify settlement message
+snip36 e2e-settlement  # full settlement: deposit → prove → settle → payout
+```
+
+Tier 2 requires `snip36 setup` (or `./scripts/download-deps.sh deps-v3` for the
+prebuilt binaries), a funded account, and RPC + gateway in `.env`. In CI it is
+**not** a per-PR gate — it runs on the daily schedule, on `workflow_dispatch`,
+and on PRs labelled `run-e2e` (see `.github/workflows/daily-health.yml`).
+Changes to the proving/submission path ultimately need Tier 2, but extract the
+verifiable part into a pure function and unit-test it at Tier 1 where you can.
 
 ## Environment
 
