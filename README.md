@@ -146,6 +146,28 @@ cd web/frontend && npm install && npm run dev
 
 Open http://localhost:3000
 
+## Docker
+
+Each `v*` release publishes an all-in-one image (CLI + playground + the prebuilt
+proving stack) to GHCR — no `snip36 setup` needed, proving runs in-container:
+
+```bash
+# Playground API server (port 8090):
+docker run --rm -p 8090:8090 \
+  -e STARKNET_RPC_URL=... -e STARKNET_ACCOUNT_ADDRESS=... \
+  -e STARKNET_PRIVATE_KEY=... -e STARKNET_GATEWAY_URL=... \
+  ghcr.io/starknet-innovation/snip-36-prover-backend:latest
+
+# Or the CLI (override the default command):
+docker run --rm -e STARKNET_RPC_URL=... \
+  ghcr.io/starknet-innovation/snip-36-prover-backend:latest \
+  snip36 prove virtual-os --tx-hash 0x... --block-number N
+```
+
+The image bundles the stwo prover, virtual-OS runner, sierra compiler, and
+bootloader (linux/amd64). It does **not** include contract-dev tooling
+(scarb/sncast). See [RELEASING.md](RELEASING.md).
+
 ## Full Pipeline (Step by Step)
 
 ### Step 1: Prepare an account and deploy/invoke a contract

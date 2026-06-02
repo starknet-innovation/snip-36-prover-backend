@@ -29,9 +29,13 @@ prebuilt deps, for both platforms (4 assets total).
    ```bash
    git tag v1.2.0 && git push origin v1.2.0
    ```
-5. `build-deps.yml` runs (~30–40 min) and creates the release with:
-   - `snip36-linux-x86_64.tar.gz`, `snip36-darwin-arm64.tar.gz` — `snip36` + `snip36-playground`
-   - `snip36-deps-<platform>.tar.gz` — the prebuilt dependency bundle
+5. `build-deps.yml` runs (~30–40 min) and:
+   - creates the GitHub release with `snip36-<platform>.tar.gz` (`snip36` +
+     `snip36-playground`) and `snip36-deps-<platform>.tar.gz` (prebuilt deps);
+   - builds, smoke-tests, and pushes the all-in-one Docker image to
+     `ghcr.io/starknet-innovation/snip-36-prover-backend:<x.y.z>` and `:latest`
+     (linux/amd64; see `Dockerfile`). The image is **not** published for
+     `deps-v*` tags.
 
 ## `deps-v<n>` — prebuilt dependency bundle
 

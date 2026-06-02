@@ -122,8 +122,10 @@ verifiable part into a pure function and unit-test it at Tier 1 where you can.
 Version is single-sourced in `[workspace.package]` (root `Cargo.toml`); members
 inherit via `version.workspace = true`. Two tag schemes, both handled by
 `.github/workflows/build-deps.yml`:
-- `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries
-  **and** the matching prebuilt deps (must equal the workspace version).
+- `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries,
+  the matching prebuilt deps, **and** an all-in-one Docker image to
+  `ghcr.io/.../snip-36-prover-backend:<x.y.z>` + `:latest` (see `Dockerfile`).
+  Must equal the workspace version.
 - `deps-v<n>` — prebuilt dependency bundle only (what `download-deps.sh` pulls);
   cut a new one when the pins change.
 
