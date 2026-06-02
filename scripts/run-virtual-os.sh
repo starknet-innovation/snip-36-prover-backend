@@ -124,21 +124,33 @@ else
         exit 1
     fi
 
-    RUNNER_BIN="$DEPS_DIR/sequencer/target/release/starknet_os_runner"
-    if [ ! -f "$RUNNER_BIN" ]; then
-        echo "Building starknet_os_runner (toolchain: $STWO_NIGHTLY, feature: stwo_proving)..."
+    # The runner is named `starknet_transaction_prover` when built from source
+    # (the upstream package for the pinned sequencer tag) but `starknet_os_runner`
+    # when fetched as a prebuilt release artifact. Accept either.
+    RELEASE_DIR="$DEPS_DIR/sequencer/target/release"
+    RUNNER_BIN=""
+    for name in starknet_transaction_prover starknet_os_runner; do
+        if [ -f "$RELEASE_DIR/$name" ]; then
+            RUNNER_BIN="$RELEASE_DIR/$name"
+            break
+        fi
+    done
+
+    if [ -z "$RUNNER_BIN" ]; then
+        echo "Building starknet_transaction_prover (toolchain: $STWO_NIGHTLY, feature: stwo_proving)..."
         (
             if [ -d "$VENV_DIR" ]; then
                 export PATH="$VENV_DIR/bin:$PATH"
             fi
             cargo +"$STWO_NIGHTLY" build --release \
                 --manifest-path "$DEPS_DIR/sequencer/Cargo.toml" \
-                -p starknet_os_runner --features stwo_proving
+                -p starknet_transaction_prover --features stwo_proving
         )
+        RUNNER_BIN="$RELEASE_DIR/starknet_transaction_prover"
     fi
 
     if [ ! -f "$RUNNER_BIN" ]; then
-        echo "ERROR: starknet_os_runner binary not found after build."
+        echo "ERROR: runner binary not found after build."
         exit 1
     fi
 
