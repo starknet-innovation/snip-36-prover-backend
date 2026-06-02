@@ -47,10 +47,27 @@ else
   exit 1
 fi
 
-# Move starknet_os_runner to expected location
+# Move runner binaries to their expected locations. The current CLI expects
+# starknet_transaction_prover; starknet_os_runner is kept as a compatibility
+# alias for older scripts.
+if [ -f deps/bin/starknet_transaction_prover ]; then
+  mv deps/bin/starknet_transaction_prover deps/sequencer/target/release/starknet_transaction_prover
+  chmod +x deps/sequencer/target/release/starknet_transaction_prover
+fi
+
 if [ -f deps/bin/starknet_os_runner ]; then
   mv deps/bin/starknet_os_runner deps/sequencer/target/release/starknet_os_runner
   chmod +x deps/sequencer/target/release/starknet_os_runner
+fi
+
+if [ -f deps/sequencer/target/release/starknet_transaction_prover ] && [ ! -f deps/sequencer/target/release/starknet_os_runner ]; then
+  cp deps/sequencer/target/release/starknet_transaction_prover deps/sequencer/target/release/starknet_os_runner
+  chmod +x deps/sequencer/target/release/starknet_os_runner
+fi
+
+if [ -f deps/sequencer/target/release/starknet_os_runner ] && [ ! -f deps/sequencer/target/release/starknet_transaction_prover ]; then
+  cp deps/sequencer/target/release/starknet_os_runner deps/sequencer/target/release/starknet_transaction_prover
+  chmod +x deps/sequencer/target/release/starknet_transaction_prover
 fi
 
 # Move starknet-sierra-compile to the sequencer target location expected by
@@ -96,6 +113,7 @@ fi
 echo ""
 echo "=== Verification ==="
 [ -f deps/bin/stwo-run-and-prove ] && echo "  stwo-run-and-prove: OK ($(du -h deps/bin/stwo-run-and-prove | cut -f1))" || echo "  stwo-run-and-prove: MISSING"
+[ -f deps/sequencer/target/release/starknet_transaction_prover ] && echo "  starknet_transaction_prover: OK ($(du -h deps/sequencer/target/release/starknet_transaction_prover | cut -f1))" || echo "  starknet_transaction_prover: MISSING"
 [ -f deps/sequencer/target/release/starknet_os_runner ] && echo "  starknet_os_runner: OK ($(du -h deps/sequencer/target/release/starknet_os_runner | cut -f1))" || echo "  starknet_os_runner: MISSING"
 [ -f deps/sequencer/target/release/shared_executables/starknet-sierra-compile ] && echo "  starknet-sierra-compile: OK ($(du -h deps/sequencer/target/release/shared_executables/starknet-sierra-compile | cut -f1))" || echo "  starknet-sierra-compile: MISSING"
 [ -f deps/bin/bootloader_program.json ] && echo "  bootloader_program: OK ($(du -h deps/bin/bootloader_program.json | cut -f1))" || echo "  bootloader_program: MISSING"

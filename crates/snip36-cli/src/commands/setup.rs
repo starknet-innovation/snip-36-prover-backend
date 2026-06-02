@@ -25,7 +25,7 @@ pub struct SetupArgs {
     #[arg(long)]
     skip_prover: bool,
 
-    /// Skip building starknet_os_runner
+    /// Skip building starknet_transaction_prover
     #[arg(long)]
     skip_runner: bool,
 }
@@ -334,16 +334,16 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         }
     }
 
-    let runner_bin = sequencer_dir.join("target/release/starknet_os_runner");
+    let runner_bin = sequencer_dir.join(format!("target/release/{RUNNER_BINARY}"));
     if runner_bin.exists() {
         let check = tokio::process::Command::new(&runner_bin)
             .arg("--help")
             .output()
             .await;
         if check.map(|o| o.status.success()).unwrap_or(false) {
-            info!("  starknet_os_runner: OK");
+            info!("  {RUNNER_BINARY}: OK");
         } else {
-            info!("  WARNING: starknet_os_runner not functional.");
+            info!("  WARNING: {RUNNER_BINARY} not functional.");
         }
     }
 
