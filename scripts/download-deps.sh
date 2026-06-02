@@ -9,7 +9,10 @@
 set -euo pipefail
 
 REPO="${SNIP36_DEPS_REPO:-starknet-innovation/snip-36-prover-backend}"
-TAG="${1:-deps-v1}"
+# Default deps release. Keep in step with DEPS_RELEASE_TAG in
+# .github/workflows/daily-health.yml and the pins in build-deps.yml — bump all
+# three when cutting a new deps-v* (see RELEASING.md).
+TAG="${1:-deps-v3}"
 
 # Detect platform
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
