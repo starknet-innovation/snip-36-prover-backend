@@ -1,11 +1,17 @@
-name: Build & Release Pre-built Dependencies
+name: Build & Release
 
-# Builds stwo-run-and-prove, starknet_transaction_prover, and
-# bootloader_program.json for macOS (arm64) and Linux (x86_64), then uploads
-# them as GitHub Release assets.
+# Builds the snip36 binaries (snip36 CLI, snip36-playground) plus the prebuilt
+# external dependencies (stwo-run-and-prove, starknet_transaction_prover,
+# starknet-sierra-compile, bootloader_program.json) for macOS (arm64) and Linux
+# (x86_64), then publishes them as GitHub Release assets.
 #
-# Trigger: push a release tag like `v0.1.0`, a deps tag like `deps-v1`, or run
-# manually.
+# Tags:
+#   v<x.y.z>  — application release: publishes the snip36 binaries AND the
+#               matching prebuilt deps for both platforms. Must equal the
+#               workspace version in Cargo.toml.
+#   deps-v<n> — prebuilt dependency bundle only (what scripts/download-deps.sh
+#               consumes). Cut a new one when the pins below change.
+# Or run manually via workflow_dispatch with a `tag` input.
 
 on:
   push:
@@ -15,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v0.1.0 or deps-v1)'
+        description: 'Release tag name (e.g. v1.1.0 or deps-v1)'
         required: true
         default: 'deps-v1'
 
@@ -71,13 +77,23 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build snip36 CLI
-        run: cargo build --release -p snip36-cli
+      - name: Build snip36 binaries
+        run: cargo build --release -p snip36-cli -p snip36-playground
 
       - name: Run setup (builds prover + runner)
         run: ./target/release/snip36 setup
 
-      - name: Package binaries
+      - name: Package application binaries
+        run: |
+          set -euo pipefail
+          mkdir -p app
+          cp target/release/snip36 app/
+          cp target/release/snip36-playground app/
+          test -x app/snip36
+          test -x app/snip36-playground
+          tar czf snip36-${{ matrix.target }}.tar.gz -C app .
+
+      - name: Package dependency binaries
         run: |
           set -euo pipefail
 
@@ -110,7 +126,13 @@ jobs:
           find dist -maxdepth 3 -type f -print -exec ls -lh {} \;
           tar czf snip36-deps-${{ matrix.target }}.tar.gz -C dist .
 
-      - name: Upload artifact
+      - name: Upload application artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: snip36-${{ matrix.target }}
+          path: snip36-${{ matrix.target }}.tar.gz
+
+      - name: Upload dependency artifact
         uses: actions/upload-artifact@v7
         with:
           name: snip36-deps-${{ matrix.target }}
@@ -137,7 +159,9 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create dependency release
+      # Both paths use softprops/action-gh-release (GitHub API, no git checkout
+      # needed). A raw `gh release` CLI here fails with "not a git repository".
+      - name: Release prebuilt dependencies (deps-v*)
         if: ${{ startsWith(steps.tag.outputs.tag, 'deps-v') }}
         uses: softprops/action-gh-release@v3
         with:
@@ -166,29 +190,32 @@ jobs:
             artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
           fail_on_unmatched_files: true
-          generate_release_notes: false
 
-      - name: Attach dependency assets to release
+      - name: Release application + dependencies (v*)
         if: ${{ !startsWith(steps.tag.outputs.tag, 'deps-v') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "SNIP-36 Prover ${{ steps.tag.outputs.tag }}"
+          generate_release_notes: true
+          body: |
+            SNIP-36 virtual-block prover — ${{ steps.tag.outputs.tag }}.
 
-          assets=(
+            **Application binaries** (per platform, in `snip36-<platform>.tar.gz`):
+            - `snip36` — unified CLI
+            - `snip36-playground` — web playground server
+
+            **Bundled prebuilt dependencies** (in `snip36-deps-<platform>.tar.gz`):
+            - `stwo-run-and-prove`, `starknet_transaction_prover`
+              (+ `starknet_os_runner` alias), `starknet-sierra-compile`,
+              `bootloader_program.json`
+            - sequencer `${{ env.SEQUENCER_TAG }}`, proving-utils
+              `${{ env.PROVING_UTILS_REV }}`, nightly `${{ env.STWO_NIGHTLY }}`
+
+            Platforms: linux-x86_64, darwin-arm64.
+          files: |
+            artifacts/snip36-linux-x86_64/snip36-linux-x86_64.tar.gz
+            artifacts/snip36-darwin-arm64/snip36-darwin-arm64.tar.gz
             artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
-          )
-
-          for asset in "${assets[@]}"; do
-            test -f "$asset"
-          done
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber
-          else
-            gh release create "$TAG" "${assets[@]}" \
-              --title "$TAG" \
-              --generate-notes
-          fi
+          fail_on_unmatched_files: true
