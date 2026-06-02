@@ -284,10 +284,10 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.3` — Virtual OS runner (zstd-compressed proofs)
-- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `dbc39e74` — stwo-run-and-prove binary
-- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) — Circle STARK prover
-- [starknet-crypto](https://crates.io/crates/starknet-crypto) — Poseidon hash, ECDSA signing
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.6` — Virtual OS runner (zstd-compressed proofs)
+- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `c0b937bb` — stwo-run-and-prove binary
+- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) @ `v2.2.0` — Circle STARK prover
+- [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
 
 ## License
 

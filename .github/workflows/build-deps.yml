@@ -20,8 +20,8 @@ permissions:
   contents: read
 
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
-  PROVING_UTILS_REV: main
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
+  PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
 
 jobs:

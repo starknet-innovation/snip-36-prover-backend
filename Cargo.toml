@@ -21,8 +21,9 @@ license = "MIT OR Apache-2.0"
 # Starknet (only the low-level crates we actually use)
 # starknet-rust-crypto is the Software Mansion maintained fork of starknet-crypto
 # (xJonathanLEI's crate has slowed; SM now publishes the starknet-rust-* suite).
-starknet-rust-crypto = "0.19"
-starknet-types-core = "0.2"
+starknet-rust-crypto = "0.19.1"
+# starknet-rust-crypto 0.19.1 pins starknet-types-core =0.2.4.
+starknet-types-core = "0.2.4"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

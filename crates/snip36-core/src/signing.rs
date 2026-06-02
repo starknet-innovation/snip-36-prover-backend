@@ -189,12 +189,12 @@ pub fn sign_and_build_payload(
         .collect();
 
     let payload = serde_json::json!({
-        "type": "INVOKE_FUNCTION",
+        "type": "INVOKE",
         "version": "0x3",
         "sender_address": format!("{:#x}", params.sender_address),
         "calldata": calldata_hex,
         "nonce": format!("{:#x}", params.nonce),
-        "resource_bounds": params.resource_bounds.to_gateway_json(),
+        "resource_bounds": params.resource_bounds.to_rpc_json(),
         "tip": "0x0",
         "paymaster_data": [],
         "account_deployment_data": [],
@@ -206,6 +206,21 @@ pub fn sign_and_build_payload(
     });
 
     Ok((tx_hash, payload))
+}
+
+/// Convert an RPC invoke payload to the legacy gateway shape.
+pub fn to_gateway_payload(mut payload: serde_json::Value) -> serde_json::Value {
+    payload["type"] = serde_json::json!("INVOKE_FUNCTION");
+
+    if let Some(resource_bounds) = payload.get("resource_bounds").and_then(|v| v.as_object()) {
+        let mut upper = serde_json::Map::new();
+        for (key, value) in resource_bounds {
+            upper.insert(key.to_uppercase(), value.clone());
+        }
+        payload["resource_bounds"] = serde_json::Value::Object(upper);
+    }
+
+    payload
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -256,7 +271,7 @@ mod tests {
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
-        let bounds = ResourceBounds::default();
+        let bounds = ResourceBounds::zero_fee();
 
         let h1 = compute_invoke_v3_tx_hash(
             sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
@@ -273,7 +288,7 @@ mod tests {
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
-        let bounds = ResourceBounds::default();
+        let bounds = ResourceBounds::zero_fee();
 
         let h_without = compute_invoke_v3_tx_hash(
             sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],

@@ -3,10 +3,9 @@
 // Usage:
 //   cargo run -p snip36-core --example derive_address -- .env.mainnet
 
-use starknet_core::types::Felt as CoreFelt;
-use starknet_core::utils::get_contract_address;
-use starknet_crypto_07::get_public_key as get_public_key_07;
-use starknet_crypto_07::Felt as CryptoFelt07;
+use starknet_rust_core::types::Felt;
+use starknet_rust_core::utils::get_contract_address;
+use starknet_rust_crypto::get_public_key;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -36,14 +35,12 @@ fn main() {
         std::process::exit(1);
     });
 
-    let priv_crypto = CryptoFelt07::from_hex(&priv_hex).expect("invalid private key hex");
-    let pub_crypto = get_public_key_07(&priv_crypto);
+    let private_key = Felt::from_hex(&priv_hex).expect("invalid private key hex");
+    let public_key = get_public_key(&private_key);
+    let class_hash = Felt::from_hex(OZ_ACCOUNT_CLASS_HASH).unwrap();
 
-    let pub_core = CoreFelt::from_hex(&format!("{pub_crypto:#066x}")).unwrap();
-    let class_hash = CoreFelt::from_hex(OZ_ACCOUNT_CLASS_HASH).unwrap();
+    let address = get_contract_address(public_key, class_hash, &[public_key], Felt::ZERO);
 
-    let address = get_contract_address(pub_core, class_hash, &[pub_core], CoreFelt::ZERO);
-
-    println!("public_key:      {pub_core:#066x}");
+    println!("public_key:      {public_key:#066x}");
     println!("account_address: {address:#066x}");
 }

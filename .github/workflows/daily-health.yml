@@ -27,8 +27,8 @@ concurrency:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.3
-  PROVING_UTILS_REV: dbc39e74
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
+  PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
 
 jobs:

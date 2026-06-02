@@ -11,7 +11,7 @@ updates:
           - minor
           - patch
     ignore:
-      # starknet-rust-crypto 0.19 pins starknet-types-core =0.2.4, so any bump past
+      # starknet-rust-crypto 0.19.1 pins starknet-types-core =0.2.4, so any bump past
       # 0.2.x produces two incompatible Felt types at build time (12 compile errors).
       # Revisit once starknet-rust-crypto publishes a release that bumps its pin.
       - dependency-name: "starknet-types-core"

@@ -11,7 +11,7 @@ use tracing::{error, info};
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::{receipt_block_number, StarknetRpc};
 use snip36_core::signing::{
-    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload, to_gateway_payload,
 };
 use crate::selectors::PLAY_SELECTOR;
 use snip36_core::types::{ResourceBounds, SubmitParams, BALANCE_OF_SELECTOR, STRK_TOKEN};
@@ -406,6 +406,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
 
         let (tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing: {e}"))?;
+        let invoke_tx = to_gateway_payload(invoke_tx);
         let tx_hash_hex = format!("{:#x}", tx_hash);
 
         info!("  Submitting tx {}", &tx_hash_hex[..18.min(tx_hash_hex.len())]);
