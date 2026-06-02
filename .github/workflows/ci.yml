@@ -48,12 +48,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # Advisory (non-blocking): the codebase is not yet fmt/clippy-clean.
-      # Promote these to blocking once a one-time cleanup lands.
-      - name: Rustfmt (advisory)
-        continue-on-error: true
+      # Blocking: the tree is kept fmt-clean and clippy-clean.
+      - name: Rustfmt
         run: cargo fmt --all -- --check
 
-      - name: Clippy (advisory)
-        continue-on-error: true
-        run: cargo clippy --workspace --all-targets
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
