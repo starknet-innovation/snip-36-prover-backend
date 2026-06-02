@@ -38,7 +38,7 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 ## Prerequisites
 
 - **Rust** — stable (for workspace crates) + `nightly-2025-07-14` (for stwo prover)
-- **scarb** — `2.17.0-rc.4` (Cairo version required by the test contracts)
+- **scarb** — `2.12.0` (emits Sierra 1.7.0 for Sepolia-compatible test contracts)
 - **sncast** (Starknet Foundry) — for contract deployment and invocation
 - **~10 GB disk** — for cloned repos + built binaries
 - **Starknet RPC node** — for state reads during proving
