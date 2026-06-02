@@ -65,7 +65,11 @@ mod tests {
 
     #[test]
     fn test_cairo_serde_to_base64() {
-        let felts = vec!["0x1".to_string(), "0xff".to_string(), "0x100000000".to_string()];
+        let felts = vec![
+            "0x1".to_string(),
+            "0xff".to_string(),
+            "0x100000000".to_string(),
+        ];
         let b64 = cairo_serde_to_base64(&felts).unwrap();
         let bytes = decode_proof_base64(&b64).unwrap();
         // 0x1 -> [0,0,0,1], 0xff -> [0,0,0,255], 0x100000000 -> truncated to [0,0,0,0]

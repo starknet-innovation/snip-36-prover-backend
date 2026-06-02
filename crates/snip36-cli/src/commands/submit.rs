@@ -70,10 +70,8 @@ pub async fn run(args: SubmitArgs, env_file: Option<&std::path::Path>) -> Result
     let nonce = rpc.get_nonce(&config.account_address).await?;
     info!("  Nonce: {:#x}", nonce);
 
-    let sender_address =
-        felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
-    let private_key =
-        felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
+    let sender_address = felt_from_hex(&config.account_address).map_err(|e| eyre::eyre!(e))?;
+    let private_key = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
     let chain_id = config.chain_id_felt()?;
 
     let resource_bounds = rpc.resource_bounds().await?;

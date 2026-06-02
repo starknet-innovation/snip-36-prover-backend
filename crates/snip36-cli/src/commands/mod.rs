@@ -16,10 +16,7 @@ pub fn parse_hex_from_output(key: &str, text: &str) -> Option<String> {
     let re = regex_lite::Regex::new(&format!("(?i){pattern}")).ok()?;
     for line in text.lines() {
         if re.is_match(line) {
-            if let Some(m) = regex_lite::Regex::new(r"0x[0-9a-fA-F]+")
-                .ok()?
-                .find(line)
-            {
+            if let Some(m) = regex_lite::Regex::new(r"0x[0-9a-fA-F]+").ok()?.find(line) {
                 return Some(m.as_str().to_string());
             }
         }

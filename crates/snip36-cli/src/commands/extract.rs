@@ -52,9 +52,7 @@ pub async fn run(args: ExtractArgs, env_file: Option<&std::path::Path>) -> Resul
     // [1/2] Build extractor
     info!("[1/2] Building extractor...");
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner().template("{spinner} {msg}")?,
-    );
+    pb.set_style(ProgressStyle::default_spinner().template("{spinner} {msg}")?);
     pb.set_message("Building virtual-os-extractor...");
     pb.enable_steady_tick(std::time::Duration::from_millis(200));
 

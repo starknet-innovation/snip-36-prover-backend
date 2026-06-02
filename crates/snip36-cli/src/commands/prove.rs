@@ -130,7 +130,17 @@ pub async fn run(args: ProveArgs, env_file: Option<&std::path::Path>) -> Result<
             input,
             params,
             verify,
-        } => run_program(&program, &output, input.as_deref(), params.as_deref(), verify, env_file).await,
+        } => {
+            run_program(
+                &program,
+                &output,
+                input.as_deref(),
+                params.as_deref(),
+                verify,
+                env_file,
+            )
+            .await
+        }
         ProveMode::Pie {
             pie,
             output,
@@ -176,8 +186,7 @@ async fn run_virtual_os(
         let contents = tokio::fs::read_to_string(path)
             .await
             .wrap_err_with(|| format!("failed to read tx JSON from {}", path.display()))?;
-        serde_json::from_str(&contents)
-            .wrap_err("failed to parse transaction JSON")?
+        serde_json::from_str(&contents).wrap_err("failed to parse transaction JSON")?
     } else if let Some(hash) = tx_hash {
         info!("  Fetching transaction {hash} from RPC...");
         let resp: serde_json::Value = client
@@ -332,17 +341,16 @@ async fn run_virtual_os(
     let result = prove_response
         .get("result")
         .filter(|v| !v.is_null())
-        .ok_or_else(|| eyre::eyre!("empty result from starknet_proveTransaction: {prove_response}"))?;
+        .ok_or_else(|| {
+            eyre::eyre!("empty result from starknet_proveTransaction: {prove_response}")
+        })?;
 
     // Save proof
     if let Some(parent) = output.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let proof = result
-        .get("proof")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let proof = result.get("proof").and_then(|v| v.as_str()).unwrap_or("");
     tokio::fs::write(output, proof).await?;
 
     // Save proof_facts alongside
@@ -527,7 +535,11 @@ async fn run_pie(
 
     let tmp_dir = tempfile::tempdir()?;
     let input_file = tmp_dir.path().join("bootloader_input.json");
-    tokio::fs::write(&input_file, serde_json::to_string_pretty(&bootloader_input)?).await?;
+    tokio::fs::write(
+        &input_file,
+        serde_json::to_string_pretty(&bootloader_input)?,
+    )
+    .await?;
 
     info!("=== Proving Cairo PIE via Bootloader ===");
     info!("  PIE:        {}", pie_abs.display());
@@ -576,9 +588,7 @@ async fn run_pie(
 }
 
 /// Spawn a command and stream its stdout/stderr to tracing.
-async fn spawn_and_stream(
-    mut cmd: tokio::process::Command,
-) -> Result<std::process::ExitStatus> {
+async fn spawn_and_stream(mut cmd: tokio::process::Command) -> Result<std::process::ExitStatus> {
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 

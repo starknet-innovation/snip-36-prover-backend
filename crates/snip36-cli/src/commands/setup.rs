@@ -16,8 +16,7 @@ const STWO_NIGHTLY: &str = "nightly-2025-07-14";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
 
-const PROVING_UTILS_LOCKFILE: &[u8] =
-    include_bytes!("../../../../vendor/proving-utils.Cargo.lock");
+const PROVING_UTILS_LOCKFILE: &[u8] = include_bytes!("../../../../vendor/proving-utils.Cargo.lock");
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -181,7 +180,9 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             &["install", "--quiet", "-r", &requirements.to_string_lossy()],
         )
         .await
-        .wrap_err("failed to install sequencer Python requirements (cairo-lang needs Python <3.13)")?;
+        .wrap_err(
+            "failed to install sequencer Python requirements (cairo-lang needs Python <3.13)",
+        )?;
     }
 
     // Verify cairo-compile is available
@@ -202,7 +203,10 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         let bin_dir = deps_dir.join("bin");
         tokio::fs::create_dir_all(&bin_dir).await?;
 
-        info!("  Building in {} (this may take several minutes)...", proving_utils_dir.display());
+        info!(
+            "  Building in {} (this may take several minutes)...",
+            proving_utils_dir.display()
+        );
         let pb = ProgressBar::new_spinner();
         pb.set_style(ProgressStyle::default_spinner().template("{spinner} {msg}")?);
         pb.set_message("Building stwo-run-and-prove...");
@@ -282,7 +286,14 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Show last 30 lines of build errors
-            for line in stderr.lines().rev().take(30).collect::<Vec<_>>().into_iter().rev() {
+            for line in stderr
+                .lines()
+                .rev()
+                .take(30)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
                 error!("  {line}");
             }
             bail!("{RUNNER_PACKAGE} build failed");
@@ -330,7 +341,9 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         if check.map(|o| o.status.success()).unwrap_or(false) {
             info!("  stwo-run-and-prove: OK");
         } else {
-            info!("  WARNING: stwo-run-and-prove --help returned non-zero (may still be functional).");
+            info!(
+                "  WARNING: stwo-run-and-prove --help returned non-zero (may still be functional)."
+            );
         }
     }
 
@@ -377,7 +390,10 @@ async fn check_rust_toolchain() -> Result<()> {
         _ => {
             info!("  Installing rustup...");
             let status = tokio::process::Command::new("sh")
-                .args(["-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"])
+                .args([
+                    "-c",
+                    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+                ])
                 .status()
                 .await
                 .wrap_err("failed to install rustup")?;
@@ -396,7 +412,9 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let mut child = cmd.spawn().wrap_err_with(|| format!("failed to run {program}"))?;
+    let mut child = cmd
+        .spawn()
+        .wrap_err_with(|| format!("failed to run {program}"))?;
 
     // Collect stderr so we can show it on failure
     let stderr_handle = child.stderr.take().map(|stderr| {
@@ -471,9 +489,8 @@ async fn apply_macos_patch(sequencer_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let rlimit_file = sequencer_dir.join(
-        "crates/apollo_compilation_utils/src/resource_limits/resource_limits_unix.rs",
-    );
+    let rlimit_file = sequencer_dir
+        .join("crates/apollo_compilation_utils/src/resource_limits/resource_limits_unix.rs");
 
     if !rlimit_file.exists() {
         return Ok(());

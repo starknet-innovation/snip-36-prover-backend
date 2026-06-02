@@ -7,12 +7,12 @@ use clap::Args;
 use color_eyre::eyre::{bail, Result, WrapErr};
 use tracing::{error, info};
 
+use crate::selectors::SEND_MESSAGE_SELECTOR;
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use crate::selectors::SEND_MESSAGE_SELECTOR;
 use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
@@ -605,10 +605,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                         let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
                         if code == "TRANSACTION_RECEIVED" {
-                            pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
+                            pass(&format!(
+                                "Gateway accepted (attempt {attempt}/{max_attempts})"
+                            ));
                             rpc_tx_hash = Some(local_tx_hash_hex.clone());
                             break;
-                        } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                        } else if (msg.contains("too recent")
+                            || msg.contains("stored block hash: 0"))
                             && attempt < max_attempts
                         {
                             info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
@@ -641,7 +644,9 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                         break;
                     }
                     Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
-                        info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
+                        info!(
+                            "  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})"
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     }
                     Err(e) => {

@@ -7,7 +7,10 @@ use tracing_subscriber::EnvFilter;
 mod commands;
 
 #[derive(Parser)]
-#[command(name = "snip36", about = "Unified CLI for SNIP-36 virtual block proving")]
+#[command(
+    name = "snip36",
+    about = "Unified CLI for SNIP-36 virtual block proving"
+)]
 struct Cli {
     /// Path to .env file for configuration
     #[arg(long, global = true)]

@@ -103,7 +103,9 @@ impl StarknetRpc {
 
     /// Get the current block number.
     pub async fn block_number(&self) -> Result<u64, RpcError> {
-        let result = self.call("starknet_blockNumber", serde_json::json!({})).await?;
+        let result = self
+            .call("starknet_blockNumber", serde_json::json!({}))
+            .await?;
         result
             .as_u64()
             .ok_or_else(|| RpcError::Unexpected(format!("expected u64 block number: {result}")))
@@ -120,9 +122,15 @@ impl StarknetRpc {
 
     /// Get the nonce for a contract address (tries pre_confirmed, falls back to latest).
     pub async fn get_nonce(&self, address: &str) -> Result<u64, RpcError> {
-        match self.get_nonce_at_block(address, serde_json::json!("pre_confirmed")).await {
+        match self
+            .get_nonce_at_block(address, serde_json::json!("pre_confirmed"))
+            .await
+        {
             Ok(n) => Ok(n),
-            Err(_) => self.get_nonce_at_block(address, serde_json::json!("latest")).await,
+            Err(_) => {
+                self.get_nonce_at_block(address, serde_json::json!("latest"))
+                    .await
+            }
         }
     }
 
@@ -171,7 +179,10 @@ impl StarknetRpc {
         let arr = result
             .as_array()
             .ok_or_else(|| RpcError::Unexpected(format!("expected array: {result}")))?;
-        Ok(arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        Ok(arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect())
     }
 
     /// Get a transaction by hash.
@@ -242,20 +253,15 @@ impl StarknetRpc {
                     .get("finality_status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let execution_status = receipt
-                    .get("execution_status")
-                    .and_then(|v| v.as_str());
+                let execution_status = receipt.get("execution_status").and_then(|v| v.as_str());
                 let has_block = receipt.get("block_number").is_some();
 
-                if status == "REJECTED"
-                    || matches!(execution_status, Some("REVERTED"))
-                {
+                if status == "REJECTED" || matches!(execution_status, Some("REVERTED")) {
                     return Err(RpcError::TxRejected(receipt.to_string()));
                 }
                 if (status == "ACCEPTED_ON_L2" || status == "ACCEPTED_ON_L1")
                     && has_block
-                    && (execution_status.is_none()
-                        || matches!(execution_status, Some("SUCCEEDED")))
+                    && (execution_status.is_none() || matches!(execution_status, Some("SUCCEEDED")))
                 {
                     return Ok(receipt);
                 }

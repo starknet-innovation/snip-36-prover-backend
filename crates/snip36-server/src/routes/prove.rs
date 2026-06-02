@@ -82,7 +82,11 @@ pub async fn prove_transaction(
         let prove_block = match invoke_block.checked_sub(1) {
             Some(b) => b,
             None => {
-                send("error", "Cannot prove against block before genesis (invoke_block is 0)").await;
+                send(
+                    "error",
+                    "Cannot prove against block before genesis (invoke_block is 0)",
+                )
+                .await;
                 return;
             }
         };

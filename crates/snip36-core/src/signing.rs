@@ -167,10 +167,10 @@ pub fn sign_and_build_payload(
         params.nonce,
         Felt::ZERO, // tip
         &params.resource_bounds,
-        &[],  // paymaster_data
-        &[],  // account_deployment_data
-        0,    // nonce_da_mode (L1)
-        0,    // fee_da_mode (L1)
+        &[], // paymaster_data
+        &[], // account_deployment_data
+        0,   // nonce_da_mode (L1)
+        0,   // fee_da_mode (L1)
         &params.proof_facts,
     );
 
@@ -257,10 +257,7 @@ mod tests {
     fn test_chain_id_encoding() {
         let cid = chain_id_felt("SN_SEPOLIA");
         // Should match Python: int.from_bytes(b"SN_SEPOLIA", "big")
-        let expected = Felt::from_hex(
-            "0x534e5f5345504f4c4941",
-        )
-        .unwrap();
+        let expected = Felt::from_hex("0x534e5f5345504f4c4941").unwrap();
         assert_eq!(cid, expected);
     }
 
@@ -274,10 +271,30 @@ mod tests {
         let bounds = ResourceBounds::zero_fee();
 
         let h1 = compute_invoke_v3_tx_hash(
-            sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
+            sender,
+            &calldata,
+            chain_id,
+            nonce,
+            Felt::ZERO,
+            &bounds,
+            &[],
+            &[],
+            0,
+            0,
+            &[],
         );
         let h2 = compute_invoke_v3_tx_hash(
-            sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
+            sender,
+            &calldata,
+            chain_id,
+            nonce,
+            Felt::ZERO,
+            &bounds,
+            &[],
+            &[],
+            0,
+            0,
+            &[],
         );
         assert_eq!(h1, h2, "hash should be deterministic");
     }
@@ -291,7 +308,17 @@ mod tests {
         let bounds = ResourceBounds::zero_fee();
 
         let h_without = compute_invoke_v3_tx_hash(
-            sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
+            sender,
+            &calldata,
+            chain_id,
+            nonce,
+            Felt::ZERO,
+            &bounds,
+            &[],
+            &[],
+            0,
+            0,
+            &[],
         );
         let proof_facts = vec![Felt::from_hex("0x50524f4f4630").unwrap()];
         let h_with = compute_invoke_v3_tx_hash(

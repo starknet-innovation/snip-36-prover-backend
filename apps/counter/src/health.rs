@@ -48,10 +48,7 @@ pub async fn run(args: HealthArgs, env_file: Option<&std::path::Path>) -> Result
     FAILED.store(0, Ordering::Relaxed);
 
     info!("=== SNIP-36 Playground Health Check ===");
-    info!(
-        "  RPC:     {}",
-        config.rpc_url
-    );
+    info!("  RPC:     {}", config.rpc_url);
     info!(
         "  Account: {}...{}",
         &config.account_address[..10.min(config.account_address.len())],
@@ -103,7 +100,10 @@ async fn check_rpc(rpc: &StarknetRpc) {
             check_pass("RPC reachable", &format!("block {block}"));
         }
         Ok(block) => {
-            check_fail("RPC reachable", &format!("unexpected block number: {block}"));
+            check_fail(
+                "RPC reachable",
+                &format!("unexpected block number: {block}"),
+            );
             return;
         }
         Err(e) => {
@@ -241,8 +241,7 @@ async fn check_full_flow(config: &Config, rpc: &StarknetRpc) {
     let class_hash = match declare {
         Ok(output) => {
             let combined = format_cmd_output(&output);
-            parse_hex_from_output("class_hash", &combined)
-                .or_else(|| parse_long_hex(&combined))
+            parse_hex_from_output("class_hash", &combined).or_else(|| parse_long_hex(&combined))
         }
         Err(e) => {
             check_fail("Declare counter", &e.to_string());
@@ -294,7 +293,10 @@ async fn check_full_flow(config: &Config, rpc: &StarknetRpc) {
 
     let contract_address = match contract_address {
         Some(addr) => {
-            check_pass("Deploy counter", &format!("{}...", &addr[..addr.len().min(18)]));
+            check_pass(
+                "Deploy counter",
+                &format!("{}...", &addr[..addr.len().min(18)]),
+            );
             addr
         }
         None => {
@@ -350,7 +352,10 @@ async fn check_full_flow(config: &Config, rpc: &StarknetRpc) {
 
     let invoke_tx = match invoke_tx {
         Some(tx) => {
-            check_pass("Invoke increment", &format!("{}...", &tx[..tx.len().min(18)]));
+            check_pass(
+                "Invoke increment",
+                &format!("{}...", &tx[..tx.len().min(18)]),
+            );
             tx
         }
         None => {

@@ -36,16 +36,15 @@ impl Config {
             dotenvy::dotenv().ok();
         }
 
-        let rpc_url =
-            std::env::var("STARKNET_RPC_URL").map_err(|_| ConfigError::Missing("STARKNET_RPC_URL"))?;
+        let rpc_url = std::env::var("STARKNET_RPC_URL")
+            .map_err(|_| ConfigError::Missing("STARKNET_RPC_URL"))?;
         let account_address = std::env::var("STARKNET_ACCOUNT_ADDRESS")
             .or_else(|_| std::env::var("MASTER_ACCOUNT_ADDRESS"))
             .map_err(|_| ConfigError::Missing("STARKNET_ACCOUNT_ADDRESS"))?;
         let private_key = std::env::var("STARKNET_PRIVATE_KEY")
             .or_else(|_| std::env::var("MASTER_PRIVATE_KEY"))
             .map_err(|_| ConfigError::Missing("STARKNET_PRIVATE_KEY"))?;
-        let chain_id =
-            std::env::var("STARKNET_CHAIN_ID").unwrap_or_else(|_| "SN_SEPOLIA".into());
+        let chain_id = std::env::var("STARKNET_CHAIN_ID").unwrap_or_else(|_| "SN_SEPOLIA".into());
         let gateway_url = std::env::var("STARKNET_GATEWAY_URL")
             .ok()
             .filter(|s| !s.is_empty());
@@ -56,9 +55,7 @@ impl Config {
 
         let project_dir = std::env::var("SNIP36_PROJECT_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let output_dir = project_dir.join("output");
         let deps_dir = project_dir.join("deps");
 

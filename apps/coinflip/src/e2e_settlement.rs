@@ -8,12 +8,12 @@ use color_eyre::eyre::{bail, Result, WrapErr};
 use starknet_types_core::felt::Felt;
 use tracing::{error, info};
 
+use crate::selectors::PLAY_SELECTOR;
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::{receipt_block_number, StarknetRpc};
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload, to_gateway_payload,
 };
-use crate::selectors::PLAY_SELECTOR;
 use snip36_core::types::{ResourceBounds, SubmitParams, BALANCE_OF_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -110,8 +110,15 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
-    info!("  Bet:     {} ({})", bet, if bet == 0 { "heads" } else { "tails" });
-    info!("  Amount:  {} STRK ({} wei)", args.bet_amount, bet_amount_wei);
+    info!(
+        "  Bet:     {} ({})",
+        bet,
+        if bet == 0 { "heads" } else { "tails" }
+    );
+    info!(
+        "  Amount:  {} STRK ({} wei)",
+        args.bet_amount, bet_amount_wei
+    );
     info!("");
 
     check_prereqs(&config).await?;
@@ -124,10 +131,19 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
 
     let _ = tokio::process::Command::new("sncast")
         .args([
-            "account", "import", "--name", account_name,
-            "--address", &config.account_address,
-            "--private-key", &config.private_key,
-            "--type", "oz", "--url", &config.rpc_url, "--silent",
+            "account",
+            "import",
+            "--name",
+            account_name,
+            "--address",
+            &config.account_address,
+            "--private-key",
+            &config.private_key,
+            "--type",
+            "oz",
+            "--url",
+            &config.rpc_url,
+            "--silent",
         ])
         .output()
         .await;
@@ -156,7 +172,10 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     if build.status.success() {
         pass("Contracts compiled");
     } else {
-        fail(&format!("Compilation failed: {}", &format_cmd_output(&build)[..500.min(format_cmd_output(&build).len())]));
+        fail(&format!(
+            "Compilation failed: {}",
+            &format_cmd_output(&build)[..500.min(format_cmd_output(&build).len())]
+        ));
         bail!("compilation failed");
     }
 
@@ -166,7 +185,12 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     step(2, "Deploy CoinFlip contract");
 
     let coinflip_address = declare_and_deploy(
-        &rpc, &contracts_dir, account_name, &config.rpc_url, "CoinFlip", "",
+        &rpc,
+        &contracts_dir,
+        account_name,
+        &config.rpc_url,
+        "CoinFlip",
+        "",
     )
     .await?;
     pass(&format!("CoinFlip: {coinflip_address}"));
@@ -195,13 +219,29 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     // Approve bank to spend master's STRK
     let max_approval = "0xffffffffffffffffffffffffffffffff";
     let approve_calldata = format!("{} {} 0x0", bank_address, max_approval);
-    sncast_invoke(&rpc, account_name, &config.rpc_url, STRK_TOKEN, "approve", &approve_calldata).await?;
+    sncast_invoke(
+        &rpc,
+        account_name,
+        &config.rpc_url,
+        STRK_TOKEN,
+        "approve",
+        &approve_calldata,
+    )
+    .await?;
     pass("Approved STRK for bank");
 
     // Fund bank with 1 STRK
-    let fund_amount: u128 = 1 * 10u128.pow(18);
+    let fund_amount: u128 = 10u128.pow(18);
     let fund_calldata = format!("{} {:#x} 0x0", bank_address, fund_amount);
-    sncast_invoke(&rpc, account_name, &config.rpc_url, STRK_TOKEN, "transfer", &fund_calldata).await?;
+    sncast_invoke(
+        &rpc,
+        account_name,
+        &config.rpc_url,
+        STRK_TOKEN,
+        "transfer",
+        &fund_calldata,
+    )
+    .await?;
     pass("Funded bank with 1 STRK");
 
     // ==========================================
@@ -225,7 +265,15 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         "{} {:#x} 0x0 {:#x} {:#x}",
         session_felt, bet_amount_wei, pre_deposit_block, bet
     );
-    sncast_invoke(&rpc, account_name, &config.rpc_url, &bank_address, "deposit", &deposit_calldata).await?;
+    sncast_invoke(
+        &rpc,
+        account_name,
+        &config.rpc_url,
+        &bank_address,
+        "deposit",
+        &deposit_calldata,
+    )
+    .await?;
     pass(&format!("Player deposited {} STRK", args.bet_amount));
 
     // ==========================================
@@ -233,18 +281,31 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     // ==========================================
     step(6, "Bank match deposit");
 
-    let match_tx = sncast_invoke(&rpc, account_name, &config.rpc_url, &bank_address, "match_deposit", &session_felt).await?;
+    let match_tx = sncast_invoke(
+        &rpc,
+        account_name,
+        &config.rpc_url,
+        &bank_address,
+        "match_deposit",
+        &session_felt,
+    )
+    .await?;
 
     // Use the block where match_deposit was confirmed as seed_block
     let match_receipt = rpc.wait_for_tx(&match_tx, 120, 3).await?;
     let match_block = receipt_block_number(&match_receipt).unwrap_or(0);
     let reference_block = match_block.max(pre_deposit_block);
     let seed = format!("{:#x}", reference_block);
-    pass(&format!("Bank matched (block {match_block}), seed_block: {reference_block}"));
+    pass(&format!(
+        "Bank matched (block {match_block}), seed_block: {reference_block}"
+    ));
 
     // Record player balance before settle
     let balance_before = get_strk_balance(&rpc, &config.account_address).await;
-    info!("  Player STRK balance before: {:.6}", balance_before as f64 / 1e18);
+    info!(
+        "  Player STRK balance before: {:.6}",
+        balance_before as f64 / 1e18
+    );
 
     // ==========================================
     // STEP 7: Prove coin flip
@@ -264,7 +325,11 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     info!(
         "  Expected: {} ({}) => {}",
         expected_outcome,
-        if expected_outcome == 0 { "heads" } else { "tails" },
+        if expected_outcome == 0 {
+            "heads"
+        } else {
+            "tails"
+        },
         if expected_won { "WIN" } else { "LOSE" },
     );
 
@@ -294,8 +359,17 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
 
     let zero_bounds = ResourceBounds::zero_fee();
     let standard_tx_hash = compute_invoke_v3_tx_hash(
-        sender_felt, &calldata_felts, chain_id, nonce_felt, Felt::ZERO,
-        &zero_bounds, &[], &[], 0, 0, &[],
+        sender_felt,
+        &calldata_felts,
+        chain_id,
+        nonce_felt,
+        Felt::ZERO,
+        &zero_bounds,
+        &[],
+        &[],
+        0,
+        0,
+        &[],
     );
 
     let sig = sign(private_key_felt, standard_tx_hash).map_err(|e| eyre::eyre!("signing: {e}"))?;
@@ -325,11 +399,16 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     let prover_url = args.prover_url.as_deref().or(env_prover_url.as_deref());
 
     let mut prove_args = vec![
-        "prove".to_string(), "virtual-os".to_string(),
-        "--block-number".to_string(), reference_block.to_string(),
-        "--tx-json".to_string(), tx_path.to_string_lossy().to_string(),
-        "--rpc-url".to_string(), config.rpc_url.clone(),
-        "--output".to_string(), proof_path.to_string_lossy().to_string(),
+        "prove".to_string(),
+        "virtual-os".to_string(),
+        "--block-number".to_string(),
+        reference_block.to_string(),
+        "--tx-json".to_string(),
+        tx_path.to_string_lossy().to_string(),
+        "--rpc-url".to_string(),
+        config.rpc_url.clone(),
+        "--output".to_string(),
+        proof_path.to_string_lossy().to_string(),
     ];
     if let Some(url) = prover_url {
         prove_args.push("--prover-url".to_string());
@@ -360,14 +439,23 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         let msg_str = tokio::fs::read_to_string(&messages_file).await?;
         let msg_json: serde_json::Value = serde_json::from_str(&msg_str)?;
         if let Some(msgs) = msg_json.get("l2_to_l1_messages").and_then(|v| v.as_array()) {
-            if let Some(payload) = msgs.first().and_then(|m| m.get("payload")).and_then(|v| v.as_array()) {
-                let fields: Vec<String> = payload.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            if let Some(payload) = msgs
+                .first()
+                .and_then(|m| m.get("payload"))
+                .and_then(|v| v.as_array())
+            {
+                let fields: Vec<String> = payload
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
                 if fields.len() >= 5 {
                     let msg_outcome = if fields[3] == "0x0" { 0u8 } else { 1u8 };
                     if msg_outcome == expected_outcome {
                         pass("Settlement message matches expected outcome");
                     } else {
-                        fail(&format!("Outcome mismatch: msg={msg_outcome}, expected={expected_outcome}"));
+                        fail(&format!(
+                            "Outcome mismatch: msg={msg_outcome}, expected={expected_outcome}"
+                        ));
                     }
                 }
             }
@@ -383,7 +471,10 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         // ==========================================
         step(8, "Submit proof on-chain");
 
-        let proof_b64 = tokio::fs::read_to_string(&proof_path).await?.trim().to_string();
+        let proof_b64 = tokio::fs::read_to_string(&proof_path)
+            .await?
+            .trim()
+            .to_string();
         let proof_facts_file = proof_path.with_extension("proof_facts");
         let proof_facts_str = tokio::fs::read_to_string(&proof_facts_file).await?;
         let proof_facts_hex = parse_proof_facts_json(&proof_facts_str)
@@ -409,15 +500,27 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         let invoke_tx = to_gateway_payload(invoke_tx);
         let tx_hash_hex = format!("{:#x}", tx_hash);
 
-        info!("  Submitting tx {}", &tx_hash_hex[..18.min(tx_hash_hex.len())]);
+        info!(
+            "  Submitting tx {}",
+            &tx_hash_hex[..18.min(tx_hash_hex.len())]
+        );
 
         let gateway_url = config.gateway_url.as_deref().unwrap_or("");
-        let submit_url = format!("{}/gateway/add_transaction", gateway_url.trim_end_matches('/'));
+        let submit_url = format!(
+            "{}/gateway/add_transaction",
+            gateway_url.trim_end_matches('/')
+        );
 
         let client = reqwest::Client::new();
         let mut accepted = false;
         for attempt in 1..=20 {
-            match client.post(&submit_url).json(&invoke_tx).timeout(std::time::Duration::from_secs(120)).send().await {
+            match client
+                .post(&submit_url)
+                .json(&invoke_tx)
+                .timeout(std::time::Duration::from_secs(120))
+                .send()
+                .await
+            {
                 Ok(resp) => {
                     let body: serde_json::Value = resp.json().await.unwrap_or_default();
                     let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
@@ -426,7 +529,9 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
                         pass(&format!("Proof accepted (attempt {attempt})"));
                         accepted = true;
                         break;
-                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0")) && attempt < 20 {
+                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                        && attempt < 20
+                    {
                         info!("  Attempt {attempt}/20: not ready, waiting 10s... ({msg})");
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     } else {
@@ -463,7 +568,15 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         step(9, "Settle on-chain");
 
         let settle_calldata = format!("{} {}", session_felt, seed);
-        sncast_invoke(&rpc, account_name, &config.rpc_url, &bank_address, "settle", &settle_calldata).await?;
+        sncast_invoke(
+            &rpc,
+            account_name,
+            &config.rpc_url,
+            &bank_address,
+            "settle",
+            &settle_calldata,
+        )
+        .await?;
         pass("Settlement tx confirmed");
 
         // ==========================================
@@ -472,21 +585,25 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         step(10, "Verify settlement");
 
         let balance_after = get_strk_balance(&rpc, &config.account_address).await;
-        info!("  Player STRK balance after:  {:.6}", balance_after as f64 / 1e18);
+        info!(
+            "  Player STRK balance after:  {:.6}",
+            balance_after as f64 / 1e18
+        );
 
-        let diff = if balance_after > balance_before {
-            balance_after - balance_before
-        } else {
-            0
-        };
+        let diff = balance_after.saturating_sub(balance_before);
         let diff_strk = diff as f64 / 1e18;
 
         if expected_won {
             // Player should have gained ~bet_amount (minus gas)
             if diff > 0 {
-                pass(&format!("Player balance increased by {:.6} STRK (won)", diff_strk));
+                pass(&format!(
+                    "Player balance increased by {:.6} STRK (won)",
+                    diff_strk
+                ));
             } else {
-                fail(&format!("Player balance did NOT increase (expected win, diff={diff_strk})"));
+                fail(&format!(
+                    "Player balance did NOT increase (expected win, diff={diff_strk})"
+                ));
             }
         } else {
             // Player lost — balance should have decreased (deposit was taken)
@@ -530,7 +647,10 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
 
 async fn check_prereqs(config: &Config) -> Result<()> {
     for cmd in ["scarb", "sncast"] {
-        let check = tokio::process::Command::new("which").arg(cmd).output().await;
+        let check = tokio::process::Command::new("which")
+            .arg(cmd)
+            .output()
+            .await;
         if check.map(|o| !o.status.success()).unwrap_or(true) {
             bail!("{cmd} not found in PATH");
         }
@@ -552,8 +672,13 @@ async fn declare_and_deploy(
     // Declare
     let declare_output = tokio::process::Command::new("sncast")
         .args([
-            "--account", account_name, "declare",
-            "--contract-name", contract_name, "--url", rpc_url,
+            "--account",
+            account_name,
+            "declare",
+            "--contract-name",
+            contract_name,
+            "--url",
+            rpc_url,
         ])
         .current_dir(contracts_dir)
         .output()
@@ -571,11 +696,15 @@ async fn declare_and_deploy(
     // Deploy
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
     let mut deploy_args = vec![
-        "--account".to_string(), account_name.to_string(),
+        "--account".to_string(),
+        account_name.to_string(),
         "deploy".to_string(),
-        "--class-hash".to_string(), class_hash.clone(),
-        "--salt".to_string(), salt,
-        "--url".to_string(), rpc_url.to_string(),
+        "--class-hash".to_string(),
+        class_hash.clone(),
+        "--salt".to_string(),
+        salt,
+        "--url".to_string(),
+        rpc_url.to_string(),
     ];
     if !constructor_calldata.is_empty() {
         deploy_args.push("--constructor-calldata".to_string());
@@ -608,11 +737,17 @@ async fn sncast_invoke(
 ) -> Result<String> {
     let output = tokio::process::Command::new("sncast")
         .args([
-            "--account", account_name, "invoke",
-            "--url", rpc_url,
-            "--contract-address", contract_address,
-            "--function", function,
-            "--calldata", calldata,
+            "--account",
+            account_name,
+            "invoke",
+            "--url",
+            rpc_url,
+            "--contract-address",
+            contract_address,
+            "--function",
+            function,
+            "--calldata",
+            calldata,
         ])
         .output()
         .await?;
@@ -621,14 +756,18 @@ async fn sncast_invoke(
     let tx_hash = parse_hex_from_output("transaction_hash", &text)
         .ok_or_else(|| eyre::eyre!("{function} invoke failed: {text}"))?;
 
-    rpc.wait_for_tx(&tx_hash, 120, 3).await
+    rpc.wait_for_tx(&tx_hash, 120, 3)
+        .await
         .wrap_err(format!("{function} tx not confirmed: {tx_hash}"))?;
 
     Ok(tx_hash)
 }
 
 async fn get_strk_balance(rpc: &StarknetRpc, address: &str) -> u128 {
-    match rpc.starknet_call(STRK_TOKEN, BALANCE_OF_SELECTOR, &[address]).await {
+    match rpc
+        .starknet_call(STRK_TOKEN, BALANCE_OF_SELECTOR, &[address])
+        .await
+    {
         Ok(result) => {
             let low = result.first().map(|s| s.as_str()).unwrap_or("0x0");
             u128::from_str_radix(low.trim_start_matches("0x"), 16).unwrap_or(0)

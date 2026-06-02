@@ -26,7 +26,11 @@ pub async fn run(args: FundArgs, env_file: Option<&std::path::Path>) -> Result<(
 
     info!("=== Transfer STRK ===");
     info!("  To:     {}", args.to);
-    info!("  Amount: {} wei ({:.2} STRK)", args.amount, args.amount as f64 / 1e18);
+    info!(
+        "  Amount: {} wei ({:.2} STRK)",
+        args.amount,
+        args.amount as f64 / 1e18
+    );
 
     let calldata = format!("{} {:#x} {:#x}", args.to, amount_low, amount_high);
 
