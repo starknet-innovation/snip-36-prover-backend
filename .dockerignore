@@ -1,0 +1,9 @@
+# The image build only needs the Dockerfile, scripts/, sample-input/, and the
+# two release tarballs the workflow stages into the context. Exclude everything
+# else (esp. the huge target/ and deps/ trees).
+*
+!Dockerfile
+!scripts/
+!sample-input/
+!snip36-linux-x86_64.tar.gz
+!snip36-deps-linux-x86_64.tar.gz

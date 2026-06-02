@@ -219,3 +219,62 @@ jobs:
             artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
           fail_on_unmatched_files: true
+
+  # All-in-one Docker image, published to GHCR on app releases (v* tags only).
+  # Assembled from the Linux artifacts — no rebuild. See Dockerfile.
+  docker:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Image version
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Stage build context
+        run: |
+          set -euo pipefail
+          cp artifacts/snip36-linux-x86_64/snip36-linux-x86_64.tar.gz .
+          cp artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz .
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (load for smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+
+      - name: Smoke test (binaries load in-image)
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+          docker run --rm "$IMG" snip36 --help >/dev/null
+          docker run --rm "$IMG" deps/sequencer/target/release/starknet_transaction_prover --help >/dev/null
+          echo "smoke test passed"
+
+      - name: Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
