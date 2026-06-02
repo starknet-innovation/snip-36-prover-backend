@@ -339,9 +339,7 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     // Compute expected outcome client-side for verification later
     let seed_felt = Felt::from(reference_block);
     let player_felt = felt_from_hex(&player).map_err(|e| eyre::eyre!(e))?;
-    let expected_hash = snip36_core::pedersen_hash(&seed_felt, &player_felt);
-    let hash_bytes = expected_hash.to_bytes_be();
-    let expected_outcome = hash_bytes[31] & 1; // LSB
+    let expected_outcome = crate::outcome::coinflip_outcome(seed_felt, player_felt);
     let expected_won = if expected_outcome == bet { 1u8 } else { 0u8 };
     info!(
         "  Expected outcome: {} ({}) => {}",

@@ -37,3 +37,27 @@ pub fn format_cmd_output(output: &Output) -> String {
         stdout.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_hex_matches_flexible_key() {
+        // sncast prints "Class Hash: 0x..."; the key "class_hash" should match
+        // regardless of case or underscore-vs-space.
+        let text = "Command: declare\nClass Hash: 0x05b4b537eaa2399e\nok";
+        assert_eq!(
+            parse_hex_from_output("class_hash", text).as_deref(),
+            Some("0x05b4b537eaa2399e")
+        );
+        assert_eq!(parse_hex_from_output("class_hash", "no match here"), None);
+    }
+
+    #[test]
+    fn parse_long_hex_needs_50_plus_chars() {
+        assert_eq!(parse_long_hex("addr 0x1234"), None);
+        let long = format!("class_hash: 0x{}", "a".repeat(60));
+        assert_eq!(parse_long_hex(&long).unwrap().len(), 62); // "0x" + 60 hex chars
+    }
+}

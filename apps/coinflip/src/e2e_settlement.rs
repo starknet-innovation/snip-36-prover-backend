@@ -318,9 +318,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     // Compute expected outcome
     let seed_felt = Felt::from(reference_block);
     let player_felt = felt_from_hex(&player).map_err(|e| eyre::eyre!(e))?;
-    let expected_hash = snip36_core::pedersen_hash(&seed_felt, &player_felt);
-    let hash_bytes = expected_hash.to_bytes_be();
-    let expected_outcome = hash_bytes[31] & 1;
+    let expected_outcome = crate::outcome::coinflip_outcome(seed_felt, player_felt);
     let expected_won = expected_outcome == bet;
     info!(
         "  Expected: {} ({}) => {}",

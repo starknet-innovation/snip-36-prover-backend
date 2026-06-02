@@ -339,4 +339,43 @@ mod tests {
             "hash with proof_facts should differ from without"
         );
     }
+
+    #[test]
+    fn test_felt_from_hex() {
+        assert_eq!(felt_from_hex("0x10").unwrap(), Felt::from(16u64));
+        assert_eq!(felt_from_hex("10").unwrap(), Felt::from(16u64));
+        assert!(felt_from_hex("0xZZ").is_err());
+        assert!(felt_from_hex("not-hex").is_err());
+    }
+
+    #[test]
+    fn test_sign_is_deterministic() {
+        // RFC-6979 nonce generation => signing the same hash with the same key
+        // must produce an identical (r, s). A non-deterministic nonce here would
+        // risk leaking the private key.
+        let pk = Felt::from_hex("0x1234567890abcdef").unwrap();
+        let hash = Felt::from_hex("0xdeadbeef").unwrap();
+        let a = sign(pk, hash).unwrap();
+        let b = sign(pk, hash).unwrap();
+        assert_eq!(a.r, b.r);
+        assert_eq!(a.s, b.s);
+        assert_ne!(a.r, Felt::ZERO);
+    }
+
+    #[test]
+    fn test_to_gateway_payload_renames_and_uppercases() {
+        let rpc = serde_json::json!({
+            "type": "INVOKE",
+            "resource_bounds": {
+                "l1_gas": {"max_amount": "0x0", "max_price_per_unit": "0x0"},
+                "l2_gas": {"max_amount": "0x7000000", "max_price_per_unit": "0x0"},
+            },
+        });
+        let gw = to_gateway_payload(rpc);
+        assert_eq!(gw["type"], "INVOKE_FUNCTION");
+        let rb = gw["resource_bounds"].as_object().unwrap();
+        assert!(rb.contains_key("L1_GAS"));
+        assert!(rb.contains_key("L2_GAS"));
+        assert!(!rb.contains_key("l1_gas"));
+    }
 }

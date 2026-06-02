@@ -75,4 +75,13 @@ mod tests {
         // 0x1 -> [0,0,0,1], 0xff -> [0,0,0,255], 0x100000000 -> truncated to [0,0,0,0]
         assert_eq!(bytes, vec![0, 0, 0, 1, 0, 0, 0, 255, 0, 0, 0, 0]);
     }
+
+    #[test]
+    fn test_parse_proof_facts_json() {
+        let facts = parse_proof_facts_json(r#"["0x1","0xabc"]"#).unwrap();
+        assert_eq!(facts, vec!["0x1".to_string(), "0xabc".to_string()]);
+        assert_eq!(parse_proof_facts_json("[]").unwrap(), Vec::<String>::new());
+        assert!(parse_proof_facts_json("not json").is_err());
+        assert!(parse_proof_facts_json("{}").is_err());
+    }
 }

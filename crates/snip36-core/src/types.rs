@@ -141,3 +141,43 @@ pub const OZ_ACCOUNT_CLASS_HASH: &str =
 /// ERC-20 `balance_of(account)` selector — standard across all Starknet tokens.
 pub const BALANCE_OF_SELECTOR: &str =
     "0x35a73cd311a05d46deda634c5ee045db92f811b4e74bca4437fcb5302b7af33";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_json_uses_lowercase_keys() {
+        let v = ResourceBounds::zero_fee().to_rpc_json();
+        assert!(v.get("l1_gas").is_some());
+        assert!(v.get("l2_gas").is_some());
+        assert!(v.get("l1_data_gas").is_some());
+        assert_eq!(v["l2_gas"]["max_amount"], "0x7000000");
+    }
+
+    #[test]
+    fn gateway_json_uses_uppercase_keys() {
+        let v = ResourceBounds::zero_fee().to_gateway_json();
+        assert!(v.get("L1_GAS").is_some());
+        assert!(v.get("L2_GAS").is_some());
+        assert!(v.get("L1_DATA_GAS").is_some());
+    }
+
+    #[test]
+    fn from_prices_applies_2x_with_saturation() {
+        let b = ResourceBounds::from_prices(10, 20, 30);
+        assert_eq!(b.l1_gas.max_price_per_unit, 20);
+        assert_eq!(b.l1_data_gas.max_price_per_unit, 40);
+        assert_eq!(b.l2_gas.max_price_per_unit, 60);
+        // Saturates instead of overflowing.
+        let s = ResourceBounds::from_prices(u128::MAX, 0, 0);
+        assert_eq!(s.l1_gas.max_price_per_unit, u128::MAX);
+    }
+
+    #[test]
+    fn wellknown_constants_are_valid_felts() {
+        for c in [STRK_TOKEN, OZ_ACCOUNT_CLASS_HASH, BALANCE_OF_SELECTOR] {
+            assert!(Felt::from_hex(c).is_ok(), "invalid felt constant: {c}");
+        }
+    }
+}
