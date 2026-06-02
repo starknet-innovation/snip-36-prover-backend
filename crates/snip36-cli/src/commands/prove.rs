@@ -17,7 +17,7 @@ pub struct ProveArgs {
 
 #[derive(Subcommand)]
 pub enum ProveMode {
-    /// Run starknet_os_runner + prover for a transaction
+    /// Run the virtual-OS runner + prover for a transaction
     VirtualOs {
         /// Block number to prove against
         #[arg(long)]
@@ -224,7 +224,7 @@ async fn run_virtual_os(
         let runner_bin = config.runner_bin();
         if !runner_bin.exists() {
             bail!(
-                "starknet_os_runner not found at {}. Run `snip36 setup` or provide --prover-url.",
+                "runner not found at {}. Run `snip36 setup` or provide --prover-url.",
                 runner_bin.display()
             );
         }
@@ -241,8 +241,9 @@ async fn run_virtual_os(
         .is_ok()
         {
             bail!(
-                "port {port} is already in use — likely a stale starknet_os_runner from a previous \
-                 run. Kill it (`pkill -f starknet_transaction_prover`) and retry, or pass --port."
+                "port {port} is already in use — likely a stale runner from a previous run. Kill \
+                 it (`pkill -f starknet_transaction_prover` or `pkill -f starknet_os_runner`) and \
+                 retry, or pass --port."
             );
         }
 
@@ -269,8 +270,8 @@ async fn run_virtual_os(
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        info!("Starting starknet_os_runner on port {port}...");
-        let mut child = cmd.spawn().wrap_err("failed to start starknet_os_runner")?;
+        info!("Starting the runner on port {port}...");
+        let mut child = cmd.spawn().wrap_err("failed to start the runner")?;
 
         // Stream stderr in background
         if let Some(stderr) = child.stderr.take() {
@@ -295,7 +296,7 @@ async fn run_virtual_os(
             }
             // Check if process exited
             if let Some(status) = child.try_wait()? {
-                bail!("starknet_os_runner exited prematurely with {status}");
+                bail!("runner exited prematurely with {status}");
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
             pb.tick();
