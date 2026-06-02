@@ -40,6 +40,9 @@ enum Commands {
     Fund(commands::fund::FundArgs),
     /// Extract virtual OS program
     Extract(commands::extract::ExtractArgs),
+    // NOTE: the generic `health` and `e2e` commands are sourced from the
+    // `snip36-counter` app — Counter is the reference application, not a
+    // counter-specific home. See `apps/counter/src/lib.rs`.
     /// CI health check
     Health(snip36_counter::health::HealthArgs),
     /// Environment setup

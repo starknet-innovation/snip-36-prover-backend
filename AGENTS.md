@@ -16,7 +16,7 @@ Rust workspace split into reusable SDK crates and example apps built on top of t
 - `crates/snip36-server/` — Server library: generic Axum routes + `AppState` (composed by app server binaries)
 
 **Apps (`apps/`) — example applications built on the SDK:**
-- `apps/counter/` — Counter contract (routes, selectors, e2e, health)
+- `apps/counter/` — Counter contract demo **and the reference app**: also backs the generic `snip36 health` and `snip36 e2e` commands (routes, selectors, e2e, health). The name "counter" doesn't imply those are counter-specific.
 - `apps/messages/` — L2→L1 messages (selectors, e2e)
 - `apps/coinflip/` — CoinFlip game (routes, state, selectors, e2e, settlement)
 - `apps/playground/` — Full server binary (`snip36-playground`) composing the SDK + all apps
