@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '0 8 * * *'  # Daily at 08:00 UTC
   pull_request:
+    # `labeled` lets adding the `run-e2e` label trigger a full run on demand.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       network:
@@ -18,11 +20,17 @@ on:
 permissions:
   contents: read
 
-# Serialize all runs so they don't race on the shared sepolia account's nonce.
-# Runs from PRs, schedule, and workflow_dispatch all share one queue; nothing
-# is cancelled so each run gets to complete.
+# The on-chain e2e must serialize on the shared Sepolia account (nonce safety),
+# so real runs share one queue. Skip-fast PR runs — which only report the
+# required check and exit — use a per-ref group so they never wait behind a
+# 45-min run.
 concurrency:
-  group: sepolia-e2e-account
+  group: >-
+    ${{ (github.event_name == 'schedule'
+         || github.event_name == 'workflow_dispatch'
+         || contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+        && 'sepolia-e2e-account'
+        || format('e2e-skip-{0}', github.ref) }}
   cancel-in-progress: false
 
 # Version pins — bump these to force a rebuild of cached deps.
@@ -30,6 +38,13 @@ env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
   PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
+  # Prebuilt deps release matching the pins above. Bump alongside them (cut a
+  # fresh deps-v* with build-deps.yml first).
+  DEPS_RELEASE_TAG: deps-v3
+  # The on-chain e2e is NOT a per-PR gate (fast build/test live in ci.yml). It
+  # runs on the daily schedule, on manual dispatch, and on PRs labelled
+  # `run-e2e`. On any other PR the job only reports the required check and exits.
+  RUN_E2E: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
 
 jobs:
   e2e-test:
@@ -39,11 +54,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust toolchains
+      - name: Install Rust toolchain
+        if: env.RUN_E2E == 'true'
         uses: dtolnay/rust-toolchain@stable
-      - run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
+      - name: Install stwo nightly toolchain
+        if: env.RUN_E2E == 'true'
+        run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
 
       - name: Cache cargo artifacts
+        if: env.RUN_E2E == 'true'
         uses: actions/cache@v5
         with:
           path: |
@@ -53,9 +72,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build snip36 CLI
+        if: env.RUN_E2E == 'true'
         run: cargo build --release -p snip36-cli
 
       - name: Install starknet-foundry (sncast)
+        if: env.RUN_E2E == 'true'
         shell: bash
         run: |
           curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
@@ -66,26 +87,30 @@ jobs:
           echo "$HOME/.starknet-foundry/bin" >> "$GITHUB_PATH"
 
       - name: Install scarb
+        if: env.RUN_E2E == 'true'
         uses: software-mansion/setup-scarb@v1
         with:
           scarb-version: "2.12.0"
 
       - name: Set up Python 3.12
+        if: env.RUN_E2E == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Verify tools
+        if: env.RUN_E2E == 'true'
         run: |
           ./snip36 --help
           sncast --version
           scarb --version
           python3 --version
 
-      # Cache the heavy deps: sequencer clone + built binaries + proving-utils + venv.
-      # Cache key includes the version pins so it rebuilds when they change.
+      # Cache the heavy deps: prebuilt binaries + cairo-compile venv. Key
+      # includes the pins so it rebuilds when they change.
       - name: Cache prebuilt deps
         id: deps-cache
+        if: env.RUN_E2E == 'true'
         uses: actions/cache@v5
         with:
           path: |
@@ -94,11 +119,29 @@ jobs:
           key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}
           save-always: true
 
-      - name: Setup deps (clone, build prover + runner)
-        if: steps.deps-cache.outputs.cache-hit != 'true'
-        run: ./snip36 setup
+      - name: Provision deps (prebuilt release, source-build fallback)
+        if: env.RUN_E2E == 'true' && steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          set -uo pipefail
+          # Fast path: download the pinned prebuilt deps release (~30s) and
+          # install cairo-lang into the venv download-deps.sh creates (it can't
+          # on its own — it has no sequencer checkout). Fall back to a full
+          # from-source build (~30 min) if anything is missing or mismatched.
+          if ./scripts/download-deps.sh "$DEPS_RELEASE_TAG" \
+             && curl -fsSL "https://raw.githubusercontent.com/starkware-libs/sequencer/${SEQUENCER_TAG}/scripts/requirements.txt" -o /tmp/seq-requirements.txt \
+             && sequencer_venv/bin/pip install --quiet -r /tmp/seq-requirements.txt \
+             && [ -x sequencer_venv/bin/cairo-compile ] \
+             && [ -x deps/sequencer/target/release/starknet_transaction_prover ] \
+             && [ -x deps/bin/stwo-run-and-prove ]; then
+            echo "Provisioned deps from prebuilt release $DEPS_RELEASE_TAG"
+          else
+            echo "Prebuilt provisioning incomplete; cleaning and building from source"
+            rm -rf deps sequencer_venv
+            ./snip36 setup
+          fi
 
       - name: Run E2E counter test
+        if: env.RUN_E2E == 'true'
         env:
           STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
@@ -108,6 +151,7 @@ jobs:
         run: ./snip36 e2e
 
       - name: Run E2E messages test
+        if: env.RUN_E2E == 'true'
         env:
           STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
