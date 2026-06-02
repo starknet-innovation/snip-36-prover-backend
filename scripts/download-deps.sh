@@ -53,6 +53,17 @@ if [ -f deps/bin/starknet_os_runner ]; then
   chmod +x deps/sequencer/target/release/starknet_os_runner
 fi
 
+# Move starknet-sierra-compile to the sequencer target location expected by
+# sequencer tooling.
+if [ -f deps/bin/shared_executables/bin/starknet-sierra-compile ]; then
+  mkdir -p deps/sequencer/target/release/shared_executables
+  mv \
+    deps/bin/shared_executables/bin/starknet-sierra-compile \
+    deps/sequencer/target/release/shared_executables/starknet-sierra-compile
+  chmod +x deps/sequencer/target/release/shared_executables/starknet-sierra-compile
+  rmdir -p deps/bin/shared_executables/bin 2>/dev/null || true
+fi
+
 # Ensure executables are executable
 chmod +x deps/bin/stwo-run-and-prove 2>/dev/null || true
 
@@ -86,6 +97,7 @@ echo ""
 echo "=== Verification ==="
 [ -f deps/bin/stwo-run-and-prove ] && echo "  stwo-run-and-prove: OK ($(du -h deps/bin/stwo-run-and-prove | cut -f1))" || echo "  stwo-run-and-prove: MISSING"
 [ -f deps/sequencer/target/release/starknet_os_runner ] && echo "  starknet_os_runner: OK ($(du -h deps/sequencer/target/release/starknet_os_runner | cut -f1))" || echo "  starknet_os_runner: MISSING"
+[ -f deps/sequencer/target/release/shared_executables/starknet-sierra-compile ] && echo "  starknet-sierra-compile: OK ($(du -h deps/sequencer/target/release/shared_executables/starknet-sierra-compile | cut -f1))" || echo "  starknet-sierra-compile: MISSING"
 [ -f deps/bin/bootloader_program.json ] && echo "  bootloader_program: OK ($(du -h deps/bin/bootloader_program.json | cut -f1))" || echo "  bootloader_program: MISSING"
 [ -f sequencer_venv/bin/cairo-compile ] && echo "  cairo-compile: OK" || echo "  cairo-compile: MISSING"
 
