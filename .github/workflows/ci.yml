@@ -41,16 +41,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ci-
 
-      # Blocking: these must pass to merge.
+      # Blocking: these must pass to merge. --all-features so the `cli`-gated
+      # code (snip36-core::cli_util) is built and its tests run.
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --all-features
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
 
       # Blocking: the tree is kept fmt-clean and clippy-clean.
       - name: Rustfmt
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
