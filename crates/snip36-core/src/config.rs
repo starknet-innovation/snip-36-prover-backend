@@ -98,10 +98,24 @@ impl Config {
         self.deps_dir.join("bin/stwo-run-and-prove")
     }
 
-    /// Path to the starknet_transaction_prover binary.
+    /// Path to the virtual-OS runner binary.
+    ///
+    /// The runner is named `starknet_transaction_prover` when built from source
+    /// (the upstream cargo package for the pinned sequencer tag), but
+    /// `starknet_os_runner` when fetched as a pre-built release artifact. Return
+    /// whichever is present, falling back to the release-artifact name for the
+    /// "not found" error path.
     pub fn runner_bin(&self) -> PathBuf {
-        self.deps_dir
-            .join("sequencer/target/release/starknet_transaction_prover")
+        let release = self.deps_dir.join("sequencer/target/release");
+        let os_runner = release.join("starknet_os_runner");
+        if os_runner.exists() {
+            return os_runner;
+        }
+        let tx_prover = release.join("starknet_transaction_prover");
+        if tx_prover.exists() {
+            return tx_prover;
+        }
+        os_runner
     }
 
     /// Path to the bootloader program JSON.
