@@ -8,14 +8,24 @@ SNIP-36 virtual block proving tooling for Starknet. Two-phase pipeline:
 
 ## Architecture
 
-The project is a Rust workspace with three crates:
+Rust workspace split into reusable SDK crates and example apps built on top of them.
 
-- `crates/snip36-core/` — Shared library: typed config, Starknet RPC client, SNIP-36 signing, proof encoding
-- `crates/snip36-cli/` — Unified CLI (`snip36`) with subcommands: prove, submit, deploy, fund, health, setup, extract, e2e
-- `crates/snip36-server/` — Axum web backend (replaces FastAPI) for the proving playground
+**SDK (`crates/`) — use-case-independent infrastructure:**
+- `crates/snip36-core/` — Pure library: typed config, Starknet RPC client, SNIP-36 signing, proof encoding/types
+- `crates/snip36-cli/` — Unified CLI (`snip36`); owns generic subcommands (prove, submit, deploy, fund, setup, extract) and dispatches health/e2e to the apps
+- `crates/snip36-server/` — Server library: generic Axum routes + `AppState` (composed by app server binaries)
+
+**Apps (`apps/`) — example applications built on the SDK:**
+- `apps/counter/` — Counter contract (routes, selectors, e2e, health)
+- `apps/messages/` — L2→L1 messages (selectors, e2e)
+- `apps/coinflip/` — CoinFlip game (routes, state, selectors, e2e, settlement)
+- `apps/playground/` — Full server binary (`snip36-playground`) composing the SDK + all apps
+
+**Other:**
 - `extractor/` — Rust crate that extracts the compiled virtual OS program (excluded from default workspace, requires `deps/sequencer/`)
-- `web/frontend/` — React + TypeScript playground UI (unchanged)
-- `tests/contracts/` — Cairo test contracts (Counter, Messenger, CoinFlip) for E2E tests
+- `web/frontend/` — React + TypeScript playground UI
+- `web/coinflip/` — CoinFlip demo UI
+- `tests/contracts/` — Cairo test contracts (Counter, Messenger, CoinFlip, CoinFlipBank) for E2E tests
 - `scripts/` — Shell scripts for external binary orchestration (setup, prove, run-virtual-os)
 - `sample-input/` — Template inputs for the prover and bootloader
 - `deps/` — (generated, gitignored) Cloned repos: `proving-utils`, `sequencer`
@@ -33,9 +43,9 @@ The project is a Rust workspace with three crates:
 ## Building
 
 ```bash
-cargo build --workspace              # Build all crates
-cargo build --release -p snip36-cli  # Build the CLI
-cargo build --release -p snip36-server  # Build the web backend
+cargo build --workspace                 # Build all crates + apps
+cargo build --release -p snip36-cli     # Build the CLI
+cargo build --release -p snip36-playground  # Build the web backend binary
 
 # External dependencies (stwo prover, starknet_os_runner):
 snip36 setup                         # Install external deps
@@ -55,6 +65,7 @@ snip36 setup
 snip36 e2e
 snip36 e2e-messages          # E2E test for L2→L1 messages (messenger contract)
 snip36 e2e-coinflip          # Provable coin flip example (off-chain game)
+snip36 e2e-settlement        # E2E settlement: deposit → prove → settle → payout
 ```
 
 ## Web Playground
@@ -63,7 +74,7 @@ snip36 e2e-coinflip          # Provable coin flip example (off-chain game)
 # Backend (Rust):
 cargo run --release -p snip36-playground
 
-# Frontend (unchanged):
+# Frontend (React):
 cd web/frontend && npm install && npm run dev
 ```
 
@@ -75,6 +86,7 @@ snip36 health                    # Sepolia health check (needs RPC)
 snip36 e2e                       # Full E2E: execute → prove → sign → submit
 snip36 e2e-messages              # E2E for L2→L1 messages: deploy Messenger → prove → verify raw_messages.json
 snip36 e2e-coinflip              # Provable coin flip: deploy CoinFlip → prove → verify settlement message
+snip36 e2e-settlement            # Full settlement: deposit → prove → settle → payout
 ```
 
 ## Environment
