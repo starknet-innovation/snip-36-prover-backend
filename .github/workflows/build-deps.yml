@@ -266,8 +266,8 @@ jobs:
         run: |
           set -euo pipefail
           IMG=ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-          docker run --rm "$IMG" snip36 --help >/dev/null
-          docker run --rm "$IMG" deps/sequencer/target/release/starknet_transaction_prover --help >/dev/null
+          docker run --rm "$IMG" --help >/dev/null
+          docker run --rm --entrypoint /app/deps/sequencer/target/release/starknet_transaction_prover "$IMG" --help >/dev/null
           echo "smoke test passed"
 
       - name: Push image
