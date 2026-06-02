@@ -1,6 +1,6 @@
 [package]
 name = "snip36-playground"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Full SNIP-36 playground server — combines generic SDK routes with Counter and CoinFlip examples"

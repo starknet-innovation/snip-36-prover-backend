@@ -1,6 +1,6 @@
 [package]
 name = "snip36-coinflip"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "CoinFlip game application for SNIP-36"

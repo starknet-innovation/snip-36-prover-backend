@@ -1,6 +1,6 @@
 [package]
 name = "snip36-core"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Core library for SNIP-36 virtual block proving — types, config, RPC, signing, proof handling"
