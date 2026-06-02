@@ -117,6 +117,19 @@ and on PRs labelled `run-e2e` (see `.github/workflows/daily-health.yml`).
 Changes to the proving/submission path ultimately need Tier 2, but extract the
 verifiable part into a pure function and unit-test it at Tier 1 where you can.
 
+## Releasing
+
+Version is single-sourced in `[workspace.package]` (root `Cargo.toml`); members
+inherit via `version.workspace = true`. Two tag schemes, both handled by
+`.github/workflows/build-deps.yml`:
+- `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries
+  **and** the matching prebuilt deps (must equal the workspace version).
+- `deps-v<n>` — prebuilt dependency bundle only (what `download-deps.sh` pulls);
+  cut a new one when the pins change.
+
+Full procedure (bump → tag → what each tag publishes, and keeping the pins /
+`DEPS_RELEASE_TAG` / `download-deps.sh` default in sync): see **`RELEASING.md`**.
+
 ## Environment
 
 - `.env` contains secrets (RPC URL, private key) — never commit
