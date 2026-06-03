@@ -261,6 +261,8 @@ jobs:
           context: .
           load: true
           tags: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+          build-args: |
+            RUNNER_BUILD_WORKSPACE=${{ github.workspace }}
 
       - name: Smoke test (binaries load in-image)
         run: |
@@ -268,6 +270,7 @@ jobs:
           IMG=ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
           docker run --rm "$IMG" --help >/dev/null
           docker run --rm --entrypoint /app/deps/sequencer/target/release/starknet_transaction_prover "$IMG" --help >/dev/null
+          docker run --rm --entrypoint /bin/sh "$IMG" -c 'test -x /app/deps/sequencer/target/release/shared_executables/starknet-sierra-compile && test -x "${{ github.workspace }}/deps/sequencer/target/release/shared_executables/starknet-sierra-compile"'
           echo "smoke test passed"
 
       - name: Push image
@@ -275,6 +278,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            RUNNER_BUILD_WORKSPACE=${{ github.workspace }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
             ghcr.io/${{ github.repository }}:latest
