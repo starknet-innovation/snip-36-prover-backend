@@ -249,7 +249,7 @@ jobs:
           cp artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz .
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
