@@ -1,8 +1,8 @@
 # Releasing
 
 This repo publishes GitHub Releases via `.github/workflows/build-deps.yml`,
-which builds for **linux-x86_64** and **darwin-arm64**. There are two
-independent tag schemes — pick the right one.
+which builds for **linux-x86_64**, **linux-arm64**, and **darwin-arm64**.
+There are two independent tag schemes — pick the right one.
 
 ## Versioning
 
@@ -20,7 +20,8 @@ are not part of these releases.
 ## `v<x.y.z>` — application release
 
 Publishes the `snip36` CLI + `snip36-playground` binaries **and** the matching
-prebuilt deps, for both platforms (4 assets total).
+prebuilt deps, for all three platforms, plus a `SHA256SUMS` file (7 assets
+total).
 
 1. Bump `version` in `[workspace.package]` (and `extractor/Cargo.toml`).
 2. `cargo build --workspace` to refresh `Cargo.lock`.
@@ -32,11 +33,12 @@ prebuilt deps, for both platforms (4 assets total).
 5. `build-deps.yml` runs (~30–40 min) and:
    - creates the GitHub release with `snip36-<platform>.tar.gz` (`snip36` +
      `snip36-playground`) and `snip36-deps-<platform>.tar.gz` (prebuilt deps);
-   - builds, smoke-tests, and pushes the all-in-one `snip36` CLI image (CLI +
-     proving stack; no playground server) to
+   - builds, smoke-tests (natively per arch), and pushes the all-in-one
+     `snip36` CLI image (CLI + proving stack; no playground server) to
      `ghcr.io/starknet-innovation/snip-36-prover-backend:<x.y.z>` and `:latest`
-     (linux/amd64; see `Dockerfile`). The image is **not** published for
-     `deps-v*` tags.
+     as a multi-arch manifest (linux/amd64 + linux/arm64 — the latter is what
+     Docker on Apple Silicon pulls; see `Dockerfile`). The image is **not**
+     published for `deps-v*` tags.
 
 ## `deps-v<n>` — prebuilt dependency bundle
 

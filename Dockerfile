@@ -5,12 +5,16 @@
 # proving + submitting run entirely in-container.
 #
 # Built by .github/workflows/build-deps.yml from the release's Linux artifacts —
-# NOT meant to be built standalone (it expects the two tarballs in the context).
+# NOT meant to be built standalone. The workflow stages the building platform's
+# tarballs into the context under the fixed names snip36.tar.gz and
+# snip36-deps.tar.gz (ADD cannot interpolate a per-arch source from a build
+# arg), so the same Dockerfile produces both linux/amd64 and linux/arm64.
 #
-# Base is ubuntu:24.04 to match the glibc the release binaries are built against
-# (GitHub's ubuntu-latest runner). Contract-dev tooling (scarb, sncast) and the
-# Python cairo-compile venv are intentionally NOT included — they're for
-# authoring/deploying contracts, not proving.
+# Base is ubuntu:24.04 (multi-arch) to match the glibc the release binaries are
+# built against (GitHub's ubuntu-latest / ubuntu-24.04-arm runners).
+# Contract-dev tooling (scarb, sncast) and the Python cairo-compile venv are
+# intentionally NOT included — they're for authoring/deploying contracts, not
+# proving.
 
 FROM ubuntu:24.04
 
@@ -31,14 +35,14 @@ WORKDIR /app
 
 # Install the snip36 CLI onto PATH. The tarball expands to snip36 +
 # snip36-playground; keep only the CLI (the playground server is not included).
-ADD snip36-linux-x86_64.tar.gz /tmp/snip36-app/
+ADD snip36.tar.gz /tmp/snip36-app/
 RUN cp /tmp/snip36-app/snip36 /usr/local/bin/snip36 \
     && chmod +x /usr/local/bin/snip36 \
     && rm -rf /tmp/snip36-app
 
 # Prebuilt proving stack, laid out exactly where snip36's Config expects it
 # (deps_dir = $SNIP36_PROJECT_DIR/deps). Mirrors scripts/download-deps.sh.
-ADD snip36-deps-linux-x86_64.tar.gz /tmp/snip36-deps/
+ADD snip36-deps.tar.gz /tmp/snip36-deps/
 RUN set -eux; \
     mkdir -p deps/bin deps/sequencer/target/release/shared_executables; \
     cp /tmp/snip36-deps/stwo-run-and-prove          deps/bin/; \

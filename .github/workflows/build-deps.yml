@@ -3,7 +3,8 @@ name: Build & Release
 # Builds the snip36 binaries (snip36 CLI, snip36-playground) plus the prebuilt
 # external dependencies (stwo-run-and-prove, starknet_transaction_prover,
 # starknet-sierra-compile, bootloader_program.json) for macOS (arm64) and Linux
-# (x86_64), then publishes them as GitHub Release assets.
+# (x86_64, arm64), then publishes them as GitHub Release assets together with
+# a SHA256SUMS file.
 #
 # Tags:
 #   v<x.y.z>  — application release: publishes the snip36 binaries AND the
@@ -40,6 +41,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-latest
             target: darwin-arm64
     runs-on: ${{ matrix.os }}
@@ -169,6 +172,26 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Checksums for exactly the assets each release type attaches. Generated
+      # here (not per-platform) so all tarballs land in a single SHA256SUMS.
+      # Consumers verify with: grep <asset> SHA256SUMS | sha256sum -c
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p checksums
+          DEPS="snip36-deps-linux-x86_64 snip36-deps-linux-arm64 snip36-deps-darwin-arm64"
+          APPS="snip36-linux-x86_64 snip36-linux-arm64 snip36-darwin-arm64"
+          if [[ "${{ steps.tag.outputs.tag }}" == deps-v* ]]; then
+            FILES="$DEPS"
+          else
+            FILES="$APPS $DEPS"
+          fi
+          for f in $FILES; do
+            cp "artifacts/$f/$f.tar.gz" checksums/
+          done
+          (cd checksums && sha256sum *.tar.gz > SHA256SUMS)
+          cat checksums/SHA256SUMS
+
       # Both paths use softprops/action-gh-release (GitHub API, no git checkout
       # needed). A raw `gh release` CLI here fails with "not a git repository".
       - name: Release prebuilt dependencies (deps-v*)
@@ -198,7 +221,9 @@ jobs:
             ```
           files: |
             artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
+            artifacts/snip36-deps-linux-arm64/snip36-deps-linux-arm64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
+            checksums/SHA256SUMS
           fail_on_unmatched_files: true
 
       - name: Release application + dependencies (v*)
@@ -222,20 +247,35 @@ jobs:
             - sequencer `${{ env.SEQUENCER_TAG }}`, proving-utils
               `${{ env.PROVING_UTILS_REV }}`, nightly `${{ env.STWO_NIGHTLY }}`
 
-            Platforms: linux-x86_64, darwin-arm64.
+            Platforms: linux-x86_64, linux-arm64, darwin-arm64.
           files: |
             artifacts/snip36-linux-x86_64/snip36-linux-x86_64.tar.gz
+            artifacts/snip36-linux-arm64/snip36-linux-arm64.tar.gz
             artifacts/snip36-darwin-arm64/snip36-darwin-arm64.tar.gz
             artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz
+            artifacts/snip36-deps-linux-arm64/snip36-deps-linux-arm64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
+            checksums/SHA256SUMS
           fail_on_unmatched_files: true
 
   # All-in-one Docker image, published to GHCR on app releases (v* tags only).
-  # Assembled from the Linux artifacts — no rebuild. See Dockerfile.
+  # Assembled from the Linux artifacts — no rebuild. Each architecture builds
+  # and smoke-tests NATIVELY on its own runner (no QEMU for the CPU-bound
+  # prover), pushes the per-arch image by digest, and docker-manifest stitches
+  # the digests into one multi-arch manifest. See Dockerfile.
   docker:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     needs: build
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            platform: linux/amd64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            platform: linux/arm64
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: write
@@ -243,20 +283,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Image version
-        id: meta
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
+      # The Dockerfile ADDs fixed generic names (ADD cannot interpolate a
+      # per-arch source from a build arg), so stage this platform's tarballs
+      # under those names.
       - name: Stage build context
         run: |
           set -euo pipefail
-          cp artifacts/snip36-linux-x86_64/snip36-linux-x86_64.tar.gz .
-          cp artifacts/snip36-deps-linux-x86_64/snip36-deps-linux-x86_64.tar.gz .
+          cp artifacts/snip36-${{ matrix.target }}/snip36-${{ matrix.target }}.tar.gz snip36.tar.gz
+          cp artifacts/snip36-deps-${{ matrix.target }}/snip36-deps-${{ matrix.target }}.tar.gz snip36-deps.tar.gz
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -265,31 +304,91 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build image (load for smoke test)
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: ${{ matrix.platform }}
           load: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+          tags: snip36-smoke:${{ matrix.target }}
           build-args: |
             RUNNER_BUILD_WORKSPACE=${{ github.workspace }}
 
-      - name: Smoke test (binaries load in-image)
+      - name: Smoke test (binaries load in-image, native arch)
         run: |
           set -euo pipefail
-          IMG=ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+          IMG=snip36-smoke:${{ matrix.target }}
           docker run --rm "$IMG" --help >/dev/null
           docker run --rm --entrypoint /app/deps/sequencer/target/release/starknet_transaction_prover "$IMG" --help >/dev/null
           docker run --rm --entrypoint /bin/sh "$IMG" -c 'test -x /app/deps/sequencer/target/release/shared_executables/starknet-sierra-compile && test -x "${{ github.workspace }}/deps/sequencer/target/release/shared_executables/starknet-sierra-compile"'
           echo "smoke test passed"
 
-      - name: Push image
+      # Push untagged by digest; docker-manifest assembles + tags the manifest.
+      # Reuses the buildx layer cache from the smoke-test build.
+      - name: Push image by digest
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
+          platforms: ${{ matrix.platform }}
           build-args: |
             RUNNER_BUILD_WORKSPACE=${{ github.workspace }}
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-digest-${{ matrix.target }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+  # Stitch the per-arch digests into one multi-arch manifest and tag it.
+  docker-manifest:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Image version
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: docker-digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/${{ github.repository }}
+          REFS=""
+          for f in /tmp/digests/*; do
+            REFS="$REFS $IMAGE@sha256:$(basename "$f")"
+          done
+          docker buildx imagetools create \
+            -t "$IMAGE:${{ steps.meta.outputs.version }}" \
+            -t "$IMAGE:latest" \
+            $REFS
+          docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
