@@ -158,6 +158,9 @@ jobs:
       contents: write
 
     steps:
+      # Needed for scripts/install.sh, attached to v* releases below.
+      - uses: actions/checkout@v6
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -200,6 +203,9 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "Pre-built dependencies (${{ steps.tag.outputs.tag }})"
+          # Keep `releases/latest` resolving to a v* app release —
+          # install.sh's one-liner URL depends on it.
+          make_latest: false
           body: |
             Pre-built binaries for SNIP-36 prover dependencies.
 
@@ -256,6 +262,7 @@ jobs:
             artifacts/snip36-deps-linux-arm64/snip36-deps-linux-arm64.tar.gz
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
             checksums/SHA256SUMS
+            scripts/install.sh
           fail_on_unmatched_files: true
 
   # All-in-one Docker image, published to GHCR on app releases (v* tags only).

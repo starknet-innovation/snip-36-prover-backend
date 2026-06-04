@@ -1,4 +1,5 @@
 pub mod deploy;
+pub mod doctor;
 pub mod extract;
 pub mod fund;
 pub mod prove;
@@ -6,6 +7,22 @@ pub mod setup;
 pub mod submit;
 
 use std::process::Output;
+
+/// Warn when the prebuilt deps stamp doesn't match the release this snip36
+/// build expects. Source-built deps write no stamp and stay quiet.
+pub fn warn_deps_version_mismatch(config: &snip36_core::Config) {
+    let Ok(tag) = std::fs::read_to_string(config.deps_dir.join(".deps-version")) else {
+        return;
+    };
+    let tag = tag.trim();
+    if !tag.is_empty() && tag != setup::EXPECTED_DEPS_TAG {
+        tracing::warn!(
+            "deps were provisioned from release '{tag}' but this snip36 build expects '{}'; \
+             run `snip36 setup --prebuilt` to refresh if proving misbehaves",
+            setup::EXPECTED_DEPS_TAG
+        );
+    }
+}
 
 /// Extract a hex value (0x...) from text after a flexible key match.
 ///

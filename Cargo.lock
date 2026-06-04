@@ -2088,6 +2088,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "snip36-coinflip",
  "snip36-core",
  "snip36-counter",

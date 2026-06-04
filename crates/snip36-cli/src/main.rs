@@ -45,6 +45,8 @@ enum Commands {
     // counter-specific home. See `apps/counter/src/lib.rs`.
     /// CI health check
     Health(snip36_counter::health::HealthArgs),
+    /// Validate the local proving stack (offline, no RPC/keys)
+    Doctor(commands::doctor::DoctorArgs),
     /// Environment setup
     Setup(commands::setup::SetupArgs),
     /// Full end-to-end test
@@ -84,6 +86,7 @@ async fn main() -> Result<()> {
         Commands::Fund(args) => commands::fund::run(args, env_file).await,
         Commands::Extract(args) => commands::extract::run(args, env_file).await,
         Commands::Health(args) => snip36_counter::health::run(args, env_file).await,
+        Commands::Doctor(args) => commands::doctor::run(args, env_file).await,
         Commands::Setup(args) => commands::setup::run(args, env_file).await,
         Commands::E2e(args) => snip36_counter::e2e::run(args, env_file).await,
         Commands::E2eMessages(args) => snip36_messages::e2e::run(args, env_file).await,

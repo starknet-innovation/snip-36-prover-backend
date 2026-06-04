@@ -29,4 +29,5 @@ clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"
 regex-lite = "0.1"
 rand = { workspace = true }
+sha2 = "0.10"
 tempfile = "3"

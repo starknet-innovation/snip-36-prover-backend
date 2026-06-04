@@ -220,11 +220,13 @@ async fn run_virtual_os(
         info!("  Prover: {prove_endpoint} (remote)");
     } else {
         let config = Config::from_env(env_file)?;
+        super::warn_deps_version_mismatch(&config);
 
         let runner_bin = config.runner_bin();
         if !runner_bin.exists() {
             bail!(
-                "runner not found at {}. Run `snip36 setup` or provide --prover-url.",
+                "runner not found at {}. Run `snip36 setup --prebuilt` (or `snip36 setup`) \
+                 or provide --prover-url.",
                 runner_bin.display()
             );
         }
@@ -405,11 +407,12 @@ async fn run_program(
     env_file: Option<&std::path::Path>,
 ) -> Result<()> {
     let config = Config::from_env(env_file)?;
+    super::warn_deps_version_mismatch(&config);
     let prover_bin = config.prover_bin();
 
     if !prover_bin.exists() {
         bail!(
-            "stwo-run-and-prove not found at {}. Run `snip36 setup` first.",
+            "stwo-run-and-prove not found at {}. Run `snip36 setup --prebuilt` first.",
             prover_bin.display()
         );
     }
@@ -485,11 +488,12 @@ async fn run_pie(
     env_file: Option<&std::path::Path>,
 ) -> Result<()> {
     let config = Config::from_env(env_file)?;
+    super::warn_deps_version_mismatch(&config);
     let prover_bin = config.prover_bin();
 
     if !prover_bin.exists() {
         bail!(
-            "stwo-run-and-prove not found at {}. Run `snip36 setup` first.",
+            "stwo-run-and-prove not found at {}. Run `snip36 setup --prebuilt` first.",
             prover_bin.display()
         );
     }

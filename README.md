@@ -64,19 +64,26 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 cargo build --release -p snip36-cli
 ```
 
+Or skip the Rust toolchain entirely and install a prebuilt CLI (available
+from the next `v*` release onward):
+
+```bash
+curl -fsSL https://github.com/starknet-innovation/snip-36-prover-backend/releases/latest/download/install.sh | sh
+```
+
 ### 2. Set up external dependencies (prover + runner)
 
 **Fast path — prebuilt binaries (~30 seconds, recommended):**
 
 ```bash
-./scripts/download-deps.sh
+snip36 setup --prebuilt
 ```
 
 Downloads the prebuilt prover stack (stwo prover, virtual-OS runner, sierra
 compiler, bootloader) from the pinned `deps-v*` GitHub release for your
-platform (see [Supported Platforms](#supported-platforms)), then creates the
-Python venv for `cairo-compile`. Pass a tag to pin a specific bundle, e.g.
-`./scripts/download-deps.sh deps-v3`.
+platform (see [Supported Platforms](#supported-platforms)), verifies its
+checksum, and creates the Python venv for `cairo-compile`.
+`./scripts/download-deps.sh [TAG]` does the same without a built CLI.
 
 **From source (~30 minutes — contributors, or platforms without prebuilt assets):**
 
@@ -109,10 +116,11 @@ Optional:
   local `starknet_os_runner` and sends `starknet_proveTransaction` to this URL
   instead.
 
-### 4. Run health check
+### 4. Check the stack, then run the health check
 
 ```bash
-snip36 health
+snip36 doctor   # offline: validates binaries, bootloader, and venv
+snip36 health   # on-chain: RPC, balance, full flow
 ```
 
 ### 5. Run the E2E test
@@ -146,7 +154,8 @@ snip36 submit              # Sign and submit proof via RPC
 snip36 deploy account      # Deploy an OZ account contract
 snip36 fund                # Transfer STRK from master account
 snip36 health              # Run CI health checks
-snip36 setup               # Install all external dependencies
+snip36 doctor              # Validate the local proving stack (offline)
+snip36 setup               # Install all external dependencies (--prebuilt: download instead of build)
 snip36 e2e                 # Full end-to-end test (counter contract)
 snip36 e2e-messages        # E2E test for L2→L1 messages (messenger contract)
 snip36 e2e-coinflip        # Provable coin flip example (off-chain game)

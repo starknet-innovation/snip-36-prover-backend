@@ -52,16 +52,48 @@ echo ""
 mkdir -p deps/bin
 mkdir -p deps/sequencer/target/release
 
-# Download and extract
+# Download to a temp file (not a pipe) so the checksum can be verified
+# before extraction.
+SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
+TMP_TAR="$(mktemp)"
+trap 'rm -f "$TMP_TAR"' EXIT
+
 echo "Downloading pre-built binaries..."
 if command -v curl &>/dev/null; then
-  curl -fSL "$URL" | tar xz -C deps/bin/
+  curl -fSL "$URL" -o "$TMP_TAR"
+  SUMS="$(curl -fsSL "$SUMS_URL" 2>/dev/null || true)"
 elif command -v wget &>/dev/null; then
-  wget -qO- "$URL" | tar xz -C deps/bin/
+  wget -qO "$TMP_TAR" "$URL"
+  SUMS="$(wget -qO- "$SUMS_URL" 2>/dev/null || true)"
 else
   echo "Error: neither curl nor wget found"
   exit 1
 fi
+
+# Verify against SHA256SUMS when the release publishes one (deps-v4+); warn
+# rather than fail on older tags that predate checksums.
+if [ -n "$SUMS" ]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "$TMP_TAR" | awk '{print $1}')"
+  else
+    ACTUAL="$(shasum -a 256 "$TMP_TAR" | awk '{print $1}')"
+  fi
+  EXPECTED="$(printf '%s\n' "$SUMS" | awk -v f="snip36-deps-${PLATFORM}.tar.gz" '$2 == f {print $1}')"
+  if [ -z "$EXPECTED" ]; then
+    echo "WARNING: ${TAG} SHA256SUMS has no entry for snip36-deps-${PLATFORM}.tar.gz; skipping verification"
+  elif [ "$ACTUAL" != "$EXPECTED" ]; then
+    echo "Error: checksum mismatch for snip36-deps-${PLATFORM}.tar.gz" >&2
+    echo "  expected: $EXPECTED" >&2
+    echo "  actual:   $ACTUAL" >&2
+    exit 1
+  else
+    echo "Checksum verified."
+  fi
+else
+  echo "WARNING: no SHA256SUMS published for ${TAG}; skipping checksum verification"
+fi
+
+tar xz -C deps/bin/ -f "$TMP_TAR"
 
 # Move runner binaries to their expected locations. The current CLI expects
 # starknet_transaction_prover; starknet_os_runner is kept as a compatibility
@@ -104,6 +136,9 @@ rm -rf deps/bin/shared_executables 2>/dev/null || true
 
 # Ensure executables are executable
 chmod +x deps/bin/stwo-run-and-prove 2>/dev/null || true
+
+# Stamp the provisioned release so snip36 can warn on a deps/CLI mismatch.
+echo "$TAG" > deps/.deps-version
 
 # Clear the macOS Gatekeeper quarantine attribute if present. curl/wget
 # downloads are not quarantined, but tarballs fetched via a browser and
