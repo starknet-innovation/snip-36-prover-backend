@@ -37,11 +37,24 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 
 ## Prerequisites
 
-- **Rust** — stable (for workspace crates) + `nightly-2025-07-14` (for stwo prover)
+- **Rust** — stable (for workspace crates) + `nightly-2025-07-14` (only for `snip36 setup` source builds of the stwo prover)
+- **Python 3.12** (not 3.13+) — for the `cairo-compile` venv
 - **scarb** — `2.15.2` / Cairo `2.15.0` (emits Sierra 1.7.0 for Sepolia-compatible test contracts)
 - **sncast** (Starknet Foundry) — for contract deployment and invocation
-- **~10 GB disk** — for cloned repos + built binaries
+- **~10 GB disk** — for cloned repos + built binaries (source builds; prebuilt deps are much smaller)
 - **Starknet RPC node** — for state reads during proving
+
+## Supported Platforms
+
+| Platform | Prebuilt deps (`download-deps.sh`) | Docker image |
+|----------|------------------------------------|--------------|
+| macOS arm64 (Apple Silicon) | ✅ `darwin-arm64` | amd64 only (runs emulated — slow for proving) |
+| Linux x86_64 | ✅ `linux-x86_64` | ✅ native `linux/amd64` |
+| Linux arm64 (aarch64) | ❌ — build from source via `snip36 setup` | amd64 only (needs QEMU/binfmt) |
+
+> **macOS note:** release assets downloaded with a browser (rather than
+> `curl` / `download-deps.sh`) carry the Gatekeeper quarantine attribute.
+> Clear it with `xattr -dr com.apple.quarantine <path>`.
 
 ## Quick Start
 
@@ -52,6 +65,20 @@ cargo build --release -p snip36-cli
 ```
 
 ### 2. Set up external dependencies (prover + runner)
+
+**Fast path — prebuilt binaries (~30 seconds, recommended):**
+
+```bash
+./scripts/download-deps.sh
+```
+
+Downloads the prebuilt prover stack (stwo prover, virtual-OS runner, sierra
+compiler, bootloader) from the pinned `deps-v*` GitHub release for your
+platform (see [Supported Platforms](#supported-platforms)), then creates the
+Python venv for `cairo-compile`. Pass a tag to pin a specific bundle, e.g.
+`./scripts/download-deps.sh deps-v3`.
+
+**From source (~30 minutes — contributors, or platforms without prebuilt assets):**
 
 ```bash
 snip36 setup

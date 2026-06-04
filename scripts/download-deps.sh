@@ -27,6 +27,19 @@ case "$ARCH" in
 esac
 
 PLATFORM="${OS}-${ARCH}"
+
+# Prebuilt assets exist only for these platforms — keep in sync with the
+# build matrix in .github/workflows/build-deps.yml.
+case "$PLATFORM" in
+  linux-x86_64|darwin-arm64) ;;
+  *)
+    echo "Error: no prebuilt deps for ${PLATFORM}." >&2
+    echo "Supported platforms: linux-x86_64, darwin-arm64." >&2
+    echo "Build from source instead: cargo build --release -p snip36-cli && snip36 setup" >&2
+    exit 1
+    ;;
+esac
+
 URL="https://github.com/${REPO}/releases/download/${TAG}/snip36-deps-${PLATFORM}.tar.gz"
 
 echo "=== SNIP-36 Dependency Download ==="
@@ -91,6 +104,13 @@ rm -rf deps/bin/shared_executables 2>/dev/null || true
 
 # Ensure executables are executable
 chmod +x deps/bin/stwo-run-and-prove 2>/dev/null || true
+
+# Clear the macOS Gatekeeper quarantine attribute if present. curl/wget
+# downloads are not quarantined, but tarballs fetched via a browser and
+# extracted here would be — stripping is idempotent and harmless otherwise.
+if [ "$OS" = "darwin" ]; then
+  xattr -dr com.apple.quarantine deps/ 2>/dev/null || true
+fi
 
 # Set up Python venv for cairo-compile (still needed)
 echo ""
