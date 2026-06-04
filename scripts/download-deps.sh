@@ -74,15 +74,20 @@ if [ -f deps/sequencer/target/release/starknet_os_runner ] && [ ! -f deps/sequen
 fi
 
 # Move starknet-sierra-compile to the sequencer target location expected by
-# sequencer tooling.
-if [ -f deps/bin/shared_executables/bin/starknet-sierra-compile ]; then
-  mkdir -p deps/sequencer/target/release/shared_executables
-  mv \
-    deps/bin/shared_executables/bin/starknet-sierra-compile \
-    deps/sequencer/target/release/shared_executables/starknet-sierra-compile
-  chmod +x deps/sequencer/target/release/shared_executables/starknet-sierra-compile
-  rmdir -p deps/bin/shared_executables/bin 2>/dev/null || true
-fi
+# sequencer tooling. deps-v4+ tarballs ship it flat at
+# shared_executables/starknet-sierra-compile; older tags (<= deps-v3) nest it
+# under shared_executables/bin/. Accept both.
+for sierra_src in \
+  deps/bin/shared_executables/starknet-sierra-compile \
+  deps/bin/shared_executables/bin/starknet-sierra-compile; do
+  if [ -f "$sierra_src" ]; then
+    mkdir -p deps/sequencer/target/release/shared_executables
+    mv "$sierra_src" deps/sequencer/target/release/shared_executables/starknet-sierra-compile
+    chmod +x deps/sequencer/target/release/shared_executables/starknet-sierra-compile
+    break
+  fi
+done
+rm -rf deps/bin/shared_executables 2>/dev/null || true
 
 # Ensure executables are executable
 chmod +x deps/bin/stwo-run-and-prove 2>/dev/null || true

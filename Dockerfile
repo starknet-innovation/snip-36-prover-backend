@@ -45,8 +45,16 @@ RUN set -eux; \
     cp /tmp/snip36-deps/bootloader_program.json     deps/bin/; \
     cp /tmp/snip36-deps/starknet_transaction_prover deps/sequencer/target/release/; \
     cp /tmp/snip36-deps/starknet_os_runner          deps/sequencer/target/release/; \
-    cp /tmp/snip36-deps/shared_executables/bin/starknet-sierra-compile \
-       deps/sequencer/target/release/shared_executables/; \
+    # deps-v4+ tarballs ship the sierra compiler flat at shared_executables/;
+    # older tags nest it under shared_executables/bin/. Accept both so the
+    # image can still be rebuilt from older release tarballs.
+    if [ -f /tmp/snip36-deps/shared_executables/starknet-sierra-compile ]; then \
+      cp /tmp/snip36-deps/shared_executables/starknet-sierra-compile \
+         deps/sequencer/target/release/shared_executables/; \
+    else \
+      cp /tmp/snip36-deps/shared_executables/bin/starknet-sierra-compile \
+         deps/sequencer/target/release/shared_executables/; \
+    fi; \
     chmod +x deps/bin/stwo-run-and-prove \
              deps/sequencer/target/release/starknet_transaction_prover \
              deps/sequencer/target/release/starknet_os_runner \
