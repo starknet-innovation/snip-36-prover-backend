@@ -129,6 +129,13 @@ jobs:
           find dist -maxdepth 3 -type f -print -exec ls -lh {} \;
           tar czf snip36-deps-${{ matrix.target }}.tar.gz -C dist .
 
+      # Prove + verify a tiny fixture with the binaries we just packaged, on this
+      # job's own architecture. Offline (no network/secrets); catches a prover
+      # stack that builds but cannot actually prove — previously the only check
+      # the darwin-arm64 artifacts ever got was `test -x` (#56).
+      - name: Smoke test packaged deps (offline prove + verify)
+        run: ./scripts/smoke-test-deps.sh dist
+
       - name: Upload application artifact
         uses: actions/upload-artifact@v7
         with:
