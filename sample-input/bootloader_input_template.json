@@ -1,11 +1,10 @@
 {
-  "simple_bootloader_input": {
-    "tasks": [
-      {
-        "RunProgramTask": {
-          "program_input_path": "{{PIE_PATH}}"
-        }
-      }
-    ]
-  }
+  "tasks": [
+    {
+      "path": "{{PROGRAM_PATH}}",
+      "program_hash_function": "poseidon",
+      "type": "RunProgramTask"
+    }
+  ],
+  "single_page": true
 }

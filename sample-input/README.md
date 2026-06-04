@@ -19,29 +19,50 @@ Configuration for the stwo prover. These are suitable for development/testing (l
 
 For production, increase `n_queries` to 70 and `pow_bits` to 26.
 
-**Note:** These parameters are used by `scripts/prove.sh` and `scripts/prove-pie.sh` for direct proving. The `starknet_os_runner` (used in the E2E pipeline) has its own built-in prover parameters.
+**Note:** These parameters are used when invoking `stwo-run-and-prove` directly (see below). The `starknet_os_runner` (used in the E2E pipeline) has its own built-in prover parameters.
 
 ## Bootloader Input Template (`bootloader_input_template.json`)
 
-Template for `SimpleBootloaderInput` used when proving a Cairo PIE through the bootloader. The `{{PIE_PATH}}` placeholder is replaced by `prove-pie.sh` with the actual path to the PIE file.
+Template for `SimpleBootloaderInput`, used when proving a compiled Cairo program through the bootloader. Replace `{{PROGRAM_PATH}}` with the **absolute** path to a compiled Cairo 0 program JSON (`cairo-compile`, non-proof-mode).
 
 ### SimpleBootloaderInput Format
 
 ```json
 {
-  "simple_bootloader_input": {
-    "tasks": [
-      {
-        "RunProgramTask": {
-          "program_input_path": "<path-to-pie.zip>"
-        }
-      }
-    ]
-  }
+  "tasks": [
+    {
+      "path": "<absolute-path-to-compiled-program.json>",
+      "program_hash_function": "poseidon",
+      "type": "RunProgramTask"
+    }
+  ],
+  "single_page": true
 }
 ```
 
-The bootloader loads the PIE, re-executes it, and produces a proof of correct execution.
+Field notes:
+
+- `tasks[].path` — absolute path to the compiled program the bootloader should run.
+- `tasks[].program_hash_function` — `poseidon` or `pedersen`. `pedersen` requires
+  `preprocessed_trace: "canonical"` in the prover params (the default
+  `canonical_without_pedersen` here panics with
+  `Missing pedersen points in the preprocessed trace`).
+- `single_page` — required; controls output page packing.
+
+The bootloader runs the task program, hashes it, and produces a proof of correct execution.
+
+### Direct proving example
+
+All `stwo-run-and-prove` paths must be absolute:
+
+```bash
+stwo-run-and-prove \
+  --program /abs/path/deps/bin/bootloader_program.json \
+  --program_input /abs/path/bootloader_input.json \
+  --prover_params_json /abs/path/sample-input/prover_params.json \
+  --proof_path /abs/path/out.proof \
+  --proof-format binary --verify
+```
 
 ## Proof Output Formats
 
@@ -50,7 +71,7 @@ The stwo prover supports multiple output formats:
 | Format | Description | Used by |
 |--------|-------------|---------|
 | `binary` | `bincode(CairoProofForRustVerifier)` + bzip2 compression | `starknet_os_runner` (default) |
-| `cairo-serde` | JSON array of hex field elements | `prove.sh`, `prove-pie.sh` |
+| `cairo-serde` | JSON array of hex field elements | direct `stwo-run-and-prove` runs |
 | `json` | Full proof structure as JSON | debugging |
 
 The E2E pipeline uses **binary** format. The runner decompresses the bzip2 file, encodes the bincode bytes as big-endian packed `u32` values, and returns the result as a base64 string.
