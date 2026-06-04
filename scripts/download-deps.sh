@@ -32,10 +32,10 @@ PLATFORM="${OS}-${ARCH}"
 # Prebuilt assets exist only for these platforms — keep in sync with the
 # build matrix in .github/workflows/build-deps.yml.
 case "$PLATFORM" in
-  linux-x86_64|darwin-arm64) ;;
+  linux-x86_64|linux-arm64|darwin-arm64) ;;
   *)
     echo "Error: no prebuilt deps for ${PLATFORM}." >&2
-    echo "Supported platforms: linux-x86_64, darwin-arm64." >&2
+    echo "Supported platforms: linux-x86_64, linux-arm64, darwin-arm64." >&2
     echo "Build from source instead: cargo build --release -p snip36-cli && snip36 setup" >&2
     exit 1
     ;;

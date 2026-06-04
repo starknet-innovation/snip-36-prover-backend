@@ -46,11 +46,14 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 
 ## Supported Platforms
 
-| Platform | Prebuilt deps (`download-deps.sh`) | Docker image |
+| Platform | Prebuilt deps (`setup --prebuilt`) | Docker image |
 |----------|------------------------------------|--------------|
-| macOS arm64 (Apple Silicon) | ✅ `darwin-arm64` | amd64 only (runs emulated — slow for proving) |
+| macOS arm64 (Apple Silicon) | ✅ `darwin-arm64` | ✅ pulls native `linux/arm64`* |
 | Linux x86_64 | ✅ `linux-x86_64` | ✅ native `linux/amd64` |
-| Linux arm64 (aarch64) | ❌ — build from source via `snip36 setup` | amd64 only (needs QEMU/binfmt) |
+| Linux arm64 (aarch64) | ✅ `linux-arm64` | ✅ native `linux/arm64`* |
+
+\* multi-arch image ships with the next `v*` release; earlier image tags are
+amd64-only (run emulated on ARM hosts).
 
 > **macOS note:** release assets downloaded with a browser (rather than
 > `curl` / `download-deps.sh`) carry the Gatekeeper quarantine attribute.
@@ -197,7 +200,9 @@ docker run --rm \
 ```
 
 The image bundles the stwo prover, virtual-OS runner, sierra compiler, and
-bootloader (linux/amd64). It does **not** include the playground server or
+bootloader as a multi-arch manifest (linux/amd64 + linux/arm64 — Docker on
+Apple Silicon pulls the native arm64 image; releases before the multi-arch
+switch are amd64-only). It does **not** include the playground server or
 contract-dev tooling (scarb/sncast). See [RELEASING.md](RELEASING.md).
 
 ## Full Pipeline (Step by Step)

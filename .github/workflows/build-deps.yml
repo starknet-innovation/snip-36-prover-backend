@@ -225,7 +225,7 @@ jobs:
           name: "Pre-built dependencies (${{ steps.tag.outputs.tag }})"
           # Keep `releases/latest` resolving to a v* app release —
           # install.sh's one-liner URL depends on it.
-          make_latest: false
+          make_latest: "false"
           body: |
             Pre-built binaries for SNIP-36 prover dependencies.
 
@@ -251,6 +251,24 @@ jobs:
             artifacts/snip36-deps-darwin-arm64/snip36-deps-darwin-arm64.tar.gz
             checksums/SHA256SUMS
           fail_on_unmatched_files: true
+
+      # softprops' make_latest has been observed to be ignored on release
+      # creation (deps-v4 became "latest" despite make_latest: false above).
+      # Deterministic guard: re-promote the newest v* release explicitly.
+      - name: Keep latest pointing at a v* release
+        if: ${{ startsWith(steps.tag.outputs.tag, 'deps-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest_v="$(gh api "repos/${{ github.repository }}/releases" \
+            --jq '[.[] | select((.tag_name | startswith("v")) and (.draft or .prerelease | not))][0].tag_name')"
+          if [ -n "$latest_v" ]; then
+            gh release edit "$latest_v" --repo "${{ github.repository }}" --latest
+            echo "latest -> $latest_v"
+          else
+            echo "no v* release found; skipping"
+          fi
 
       - name: Release application + dependencies (v*)
         if: ${{ !startsWith(steps.tag.outputs.tag, 'deps-v') }}
