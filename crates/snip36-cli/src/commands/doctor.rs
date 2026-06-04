@@ -91,12 +91,7 @@ pub async fn run(_args: DoctorArgs, env_file: Option<&Path>) -> Result<()> {
 
     // Prover + runner: present AND runnable (`--help` catches a binary for
     // the wrong architecture or a corrupted download).
-    check_binary(
-        &mut checks,
-        "stwo-run-and-prove",
-        &config.prover_bin(),
-    )
-    .await;
+    check_binary(&mut checks, "stwo-run-and-prove", &config.prover_bin()).await;
     check_binary(&mut checks, "virtual-OS runner", &config.runner_bin()).await;
 
     // Sierra compiler (invoked by the runner; no --help contract, so presence

@@ -18,10 +18,11 @@ const RUNNER_BINARY: &str = "starknet_transaction_prover";
 
 /// GitHub repo hosting the prebuilt deps releases (override: SNIP36_DEPS_REPO).
 const DEPS_REPO: &str = "starknet-innovation/snip-36-prover-backend";
-/// The deps-v* release this snip36 build expects. Keep in step with the
-/// default TAG in scripts/download-deps.sh and DEPS_RELEASE_TAG in
-/// .github/workflows/daily-health.yml (see RELEASING.md).
-pub const EXPECTED_DEPS_TAG: &str = "deps-v3";
+/// The deps-v* release this snip36 build expects. Single source of truth:
+/// the `deps-version` file at the repo root, baked in by build.rs (and read
+/// by scripts/download-deps.sh and daily-health.yml). Bump that file when
+/// cutting a new deps-v* (see RELEASING.md).
+pub const EXPECTED_DEPS_TAG: &str = env!("SNIP36_EXPECTED_DEPS_TAG");
 
 const PROVING_UTILS_LOCKFILE: &[u8] = include_bytes!("../../../../vendor/proving-utils.Cargo.lock");
 
@@ -606,11 +607,7 @@ async fn download_to_file(url: &str, dest: &Path) -> Result<()> {
 }
 
 async fn fetch_text(url: &str) -> Result<String> {
-    Ok(reqwest::get(url)
-        .await?
-        .error_for_status()?
-        .text()
-        .await?)
+    Ok(reqwest::get(url).await?.error_for_status()?.text().await?)
 }
 
 /// Verify `file` against its entry in a SHA256SUMS body. A missing entry

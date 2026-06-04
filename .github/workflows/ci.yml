@@ -25,6 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Blocking: extractor/Cargo.toml cannot inherit the workspace version
+      # (it is excluded from the workspace); fail fast when it drifts.
+      - name: Check version sync
+        run: ./scripts/check-versions.sh
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -9,10 +9,11 @@
 set -euo pipefail
 
 REPO="${SNIP36_DEPS_REPO:-starknet-innovation/snip-36-prover-backend}"
-# Default deps release. Keep in step with DEPS_RELEASE_TAG in
-# .github/workflows/daily-health.yml and the pins in build-deps.yml — bump all
-# three when cutting a new deps-v* (see RELEASING.md).
-TAG="${1:-deps-v3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Default deps release: the deps-version file at the repo root is the single
+# source of truth (also baked into snip36 by crates/snip36-cli/build.rs and
+# read by daily-health.yml). Bump it when cutting a new deps-v* (RELEASING.md).
+TAG="${1:-$(cat "$SCRIPT_DIR/../deps-version")}"
 
 # Detect platform
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"

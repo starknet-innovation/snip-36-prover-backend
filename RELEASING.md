@@ -17,6 +17,10 @@ are not part of these releases.
 **Rule:** the workspace version must equal the `v*` tag you release. `v1.2.0`
 ⇒ `version = "1.2.0"`.
 
+Both rules are CI-enforced by `scripts/check-versions.sh`: every PR checks
+the extractor sync (`ci.yml`), and the `build-deps.yml` preflight job fails a
+`v*` release before the builds start if the tag doesn't match.
+
 ## `v<x.y.z>` — application release
 
 Publishes the `snip36` CLI + `snip36-playground` binaries **and** the matching
@@ -48,19 +52,21 @@ Just the external prebuilt binaries (`stwo-run-and-prove`,
 `scripts/download-deps.sh` downloads. Cut a new one **whenever the pins
 change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
 
-1. Update the pins in **both** `build-deps.yml` and `daily-health.yml`.
+1. Update the pins in **both** `build-deps.yml` and `daily-health.yml`
+   (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
 2. Tag and push (incrementing N), or run the workflow manually:
    ```bash
    git tag deps-v4 && git push origin deps-v4
    # or: gh workflow run build-deps.yml -f tag=deps-v4
    ```
-3. After it publishes, **bump the references to the new tag** so the rest of the
-   repo uses it:
-   - `DEPS_RELEASE_TAG` in `.github/workflows/daily-health.yml`
-   - the default `TAG` in `scripts/download-deps.sh`
+3. After it publishes, bump the **`deps-version` file at the repo root** to
+   the new tag. That file is the single source of truth for which deps
+   release the repo consumes — `scripts/download-deps.sh` defaults to it,
+   `daily-health.yml` reads it, and `crates/snip36-cli/build.rs` bakes it
+   into `snip36` (`setup --prebuilt` + the deps-mismatch warning).
 
-> The pins, `DEPS_RELEASE_TAG`, and the `download-deps.sh` default must all
-> agree — otherwise CI/local setup fetches binaries built from different pins.
+> The pins and `deps-version` must agree — otherwise CI/local setup fetches
+> binaries built from different pins.
 
 ## Notes
 

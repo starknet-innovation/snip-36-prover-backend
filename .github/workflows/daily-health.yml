@@ -38,9 +38,8 @@ env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
   PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
-  # Prebuilt deps release matching the pins above. Bump alongside them (cut a
-  # fresh deps-v* with build-deps.yml first).
-  DEPS_RELEASE_TAG: deps-v3
+  # The prebuilt deps release tag is read from the deps-version file at the
+  # repo root (single source of truth; see RELEASING.md).
   # The on-chain e2e is NOT a per-PR gate (fast build/test live in ci.yml). It
   # runs on the daily schedule, on manual dispatch, and on PRs labelled
   # `run-e2e`. On any other PR the job only reports the required check and exits.
@@ -116,13 +115,14 @@ jobs:
           path: |
             deps
             sequencer_venv
-          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}
+          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}-${{ hashFiles('deps-version') }}
           save-always: true
 
       - name: Provision deps (prebuilt release, source-build fallback)
         if: env.RUN_E2E == 'true' && steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           set -uo pipefail
+          DEPS_RELEASE_TAG="$(cat deps-version)"
           # Fast path: download the pinned prebuilt deps release (~30s) and
           # install cairo-lang into the venv download-deps.sh creates (it can't
           # on its own — it has no sequencer checkout). Fall back to a full
