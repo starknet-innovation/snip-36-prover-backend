@@ -38,6 +38,7 @@ env:
   SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
   PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
+  SCARB_VERSION: 2.15.0
   # The prebuilt deps release tag is read from the deps-version file at the
   # repo root (single source of truth; see RELEASING.md).
   # The on-chain e2e is NOT a per-PR gate (fast build/test live in ci.yml). It
@@ -52,6 +53,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Check version sync
+        run: ./scripts/check-versions.sh
 
       - name: Install Rust toolchain
         if: env.RUN_E2E == 'true'
@@ -89,7 +93,7 @@ jobs:
         if: env.RUN_E2E == 'true'
         uses: software-mansion/setup-scarb@v1
         with:
-          scarb-version: "2.12.0"
+          scarb-version: ${{ env.SCARB_VERSION }}
 
       - name: Set up Python 3.12
         if: env.RUN_E2E == 'true'
