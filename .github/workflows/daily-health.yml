@@ -39,6 +39,7 @@ env:
   PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
   SCARB_VERSION: 2.15.0
+  STARKNET_FOUNDRY_VERSION: 0.60.0
   # The prebuilt deps release tag is read from the deps-version file at the
   # repo root (single source of truth; see RELEASING.md).
   # The on-chain e2e is NOT a per-PR gate (fast build/test live in ci.yml). It
@@ -85,7 +86,7 @@ jobs:
           curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
           source "$HOME/.bashrc" 2>/dev/null || true
           export PATH="$HOME/.local/bin:$HOME/.starknet-foundry/bin:$PATH"
-          snfoundryup
+          snfoundryup --version "$STARKNET_FOUNDRY_VERSION"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.starknet-foundry/bin" >> "$GITHUB_PATH"
 
