@@ -4,6 +4,25 @@
 
 use std::process::Output;
 
+/// Fixed resource bounds for lightweight sncast E2E declare/deploy calls.
+///
+/// These mirror the playground bounds and avoid relying on sncast fee
+/// estimation, which depends on provider-specific simulation behavior.
+pub const SNCAST_RESOURCE_BOUND_ARGS: &[&str] = &[
+    "--l1-gas",
+    "0",
+    "--l1-gas-price",
+    "1000000000000000",
+    "--l2-gas",
+    "33554432",
+    "--l2-gas-price",
+    "12000000000",
+    "--l1-data-gas",
+    "432",
+    "--l1-data-gas-price",
+    "1000000000000000",
+];
+
 /// Extract a hex value (0x...) from text after a flexible key match.
 ///
 /// Handles sncast output where "class_hash" may appear as "Class Hash",

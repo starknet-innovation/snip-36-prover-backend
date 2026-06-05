@@ -17,7 +17,9 @@ use snip36_core::Config;
 
 use crate::selectors::{GET_COUNTER_SELECTOR, INCREMENT_SELECTOR};
 
-use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use snip36_core::cli_util::{
+    format_cmd_output, parse_hex_from_output, parse_long_hex, SNCAST_RESOURCE_BOUND_ARGS,
+};
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -243,6 +245,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--contract-name",
             "Counter",
         ])
+        .args(SNCAST_RESOURCE_BOUND_ARGS)
         .current_dir(&contracts_dir)
         .output()
         .await
@@ -294,6 +297,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--salt",
             &salt,
         ])
+        .args(SNCAST_RESOURCE_BOUND_ARGS)
         .output()
         .await
         .wrap_err("failed to run sncast deploy")?;

@@ -16,7 +16,9 @@ use snip36_core::signing::{
 use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
-use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use snip36_core::cli_util::{
+    format_cmd_output, parse_hex_from_output, parse_long_hex, SNCAST_RESOURCE_BOUND_ARGS,
+};
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -225,6 +227,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                 "--contract-name",
                 "Messenger",
             ])
+            .args(SNCAST_RESOURCE_BOUND_ARGS)
             .current_dir(&contracts_dir)
             .output()
             .await
@@ -273,6 +276,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             "--salt",
             &salt,
         ])
+        .args(SNCAST_RESOURCE_BOUND_ARGS)
         .output()
         .await
         .wrap_err("failed to run sncast deploy")?;
