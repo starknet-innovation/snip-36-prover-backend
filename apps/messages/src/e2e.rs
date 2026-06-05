@@ -211,7 +211,7 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         false
     };
 
-    let class_hash = if already_declared {
+    let _class_hash = if already_declared {
         let h = computed_hash.unwrap();
         pass("Messenger already declared");
         info!("  Class hash: {h}");
@@ -271,12 +271,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             "deploy",
             "--url",
             &config.rpc_url,
-            "--class-hash",
-            &class_hash,
+            "--contract-name",
+            "Messenger",
             "--salt",
             &salt,
         ])
         .args(SNCAST_RESOURCE_BOUND_ARGS)
+        .current_dir(&contracts_dir)
         .output()
         .await
         .wrap_err("failed to run sncast deploy")?;

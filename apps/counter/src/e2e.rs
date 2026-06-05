@@ -260,7 +260,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
 
     let declare_tx_hash = parse_hex_from_output("transaction_hash", &declare_combined);
 
-    let class_hash = match class_hash {
+    let _class_hash = match class_hash {
         Some(h) => {
             pass("Contract declared");
             info!("  Class hash: {h}");
@@ -292,12 +292,13 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "deploy",
             "--url",
             &config.rpc_url,
-            "--class-hash",
-            &class_hash,
+            "--contract-name",
+            "Counter",
             "--salt",
             &salt,
         ])
         .args(SNCAST_RESOURCE_BOUND_ARGS)
+        .current_dir(&contracts_dir)
         .output()
         .await
         .wrap_err("failed to run sncast deploy")?;
