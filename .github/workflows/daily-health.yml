@@ -145,6 +145,107 @@ jobs:
             ./snip36 setup
           fi
 
+      - name: Probe Starknet RPC from runner
+        if: env.RUN_E2E == 'true'
+        env:
+          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          print_body_prefix() {
+            local body="$1"
+            head -c 300 "$body" | tr '\n' ' '
+            echo
+          }
+
+          rpc_call() {
+            local method="$1"
+            local params="${2:-[]}"
+            local body meta status content_type
+
+            body="$(mktemp)"
+            meta="$(
+              jq -nc --arg method "$method" --argjson params "$params" \
+                '{jsonrpc:"2.0",id:1,method:$method,params:$params}' |
+                curl -sS -o "$body" -w '%{http_code} %{content_type}' \
+                  -H 'Content-Type: application/json' \
+                  --data @- \
+                  "$STARKNET_RPC_URL" || true
+            )"
+            status="${meta%% *}"
+            content_type="${meta#* }"
+
+            echo "$method: HTTP ${status:-unknown}, content-type: ${content_type:-unknown}"
+
+            if [[ ! "$status" =~ ^[0-9][0-9][0-9]$ ]]; then
+              echo "$method: curl did not return a valid HTTP status"
+              print_body_prefix "$body"
+              rm -f "$body"
+              return 1
+            fi
+
+            if (( status < 200 || status >= 300 )); then
+              echo "$method: non-2xx response body prefix:"
+              print_body_prefix "$body"
+              rm -f "$body"
+              return 1
+            fi
+
+            if ! jq -e . "$body" >/dev/null 2>&1; then
+              echo "$method: non-JSON response body prefix:"
+              print_body_prefix "$body"
+              rm -f "$body"
+              return 1
+            fi
+
+            if jq -e '.error' "$body" >/dev/null; then
+              jq -c '{error: .error}' "$body"
+            else
+              jq -c '{result: .result}' "$body"
+            fi
+
+            rm -f "$body"
+          }
+
+          rpc_call starknet_chainId
+          rpc_call starknet_blockNumber
+
+          echo "Probing write-method response shape with an intentionally invalid transaction."
+          invalid_invoke_params="$(cat <<'JSON'
+          {
+            "invoke_transaction": {
+              "type": "INVOKE",
+              "version": "0x3",
+              "sender_address": "0x1",
+              "calldata": [],
+              "signature": [],
+              "nonce": "0x0",
+              "resource_bounds": {
+                "l1_gas": {
+                  "max_amount": "0x0",
+                  "max_price_per_unit": "0x0"
+                },
+                "l2_gas": {
+                  "max_amount": "0x0",
+                  "max_price_per_unit": "0x0"
+                },
+                "l1_data_gas": {
+                  "max_amount": "0x0",
+                  "max_price_per_unit": "0x0"
+                }
+              },
+              "tip": "0x0",
+              "paymaster_data": [],
+              "account_deployment_data": [],
+              "nonce_data_availability_mode": "L1",
+              "fee_data_availability_mode": "L1"
+            }
+          }
+          JSON
+          )"
+          rpc_call starknet_addInvokeTransaction "$invalid_invoke_params"
+
       - name: Run E2E counter test
         if: env.RUN_E2E == 'true'
         env:
