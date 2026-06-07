@@ -52,6 +52,7 @@ echo ""
 # Create directories
 mkdir -p deps/bin
 mkdir -p deps/sequencer/target/release
+mkdir -p deps/compiler-tools
 
 # Download to a temp file (not a pipe) so the checksum can be verified
 # before extraction.
@@ -119,10 +120,15 @@ if [ -f deps/sequencer/target/release/starknet_os_runner ] && [ ! -f deps/sequen
   chmod +x deps/sequencer/target/release/starknet_transaction_prover
 fi
 
-# Move starknet-sierra-compile to the sequencer target location expected by
-# sequencer tooling. deps-v4+ tarballs ship it flat at
-# shared_executables/starknet-sierra-compile; older tags (<= deps-v3) nest it
-# under shared_executables/bin/. Accept both.
+# Move starknet-sierra-compile to the project-local CARGO_TOOLS_ROOT layout
+# expected by sequencer v0.14.3 at runtime. deps-v5+ tarballs ship this as a
+# versioned compiler-tools/ tree. Keep the older shared_executables handling as
+# a compatibility path for explicitly requested older tags.
+if [ -d deps/bin/compiler-tools ]; then
+  rm -rf deps/compiler-tools
+  mv deps/bin/compiler-tools deps/compiler-tools
+fi
+
 for sierra_src in \
   deps/bin/shared_executables/starknet-sierra-compile \
   deps/bin/shared_executables/bin/starknet-sierra-compile; do
@@ -170,8 +176,14 @@ elif [ -f sequencer_venv/bin/cairo-compile ]; then
 else
   echo "WARNING: sequencer repo not cloned — cairo-compile not installed."
   echo "You may need to clone the sequencer for the Python venv:"
-  echo "  git clone --depth 1 -b PRIVACY-0.14.2-RC.6 https://github.com/starkware-libs/sequencer.git deps/sequencer"
+  echo "  git clone https://github.com/starkware-libs/sequencer.git deps/sequencer"
+  echo "  git -C deps/sequencer checkout ac43943748661c2b2d8bbb4a8314093a8ff00933"
   echo "  sequencer_venv/bin/pip install -r deps/sequencer/scripts/requirements.txt"
+fi
+
+SIERRA_BIN="$(find deps/compiler-tools -path '*/bin/starknet-sierra-compile' -type f -perm -111 2>/dev/null | head -n 1 || true)"
+if [ -z "$SIERRA_BIN" ] && [ -x deps/sequencer/target/release/shared_executables/starknet-sierra-compile ]; then
+  SIERRA_BIN="deps/sequencer/target/release/shared_executables/starknet-sierra-compile"
 fi
 
 echo ""
@@ -179,7 +191,7 @@ echo "=== Verification ==="
 [ -f deps/bin/stwo-run-and-prove ] && echo "  stwo-run-and-prove: OK ($(du -h deps/bin/stwo-run-and-prove | cut -f1))" || echo "  stwo-run-and-prove: MISSING"
 [ -f deps/sequencer/target/release/starknet_transaction_prover ] && echo "  starknet_transaction_prover: OK ($(du -h deps/sequencer/target/release/starknet_transaction_prover | cut -f1))" || echo "  starknet_transaction_prover: MISSING"
 [ -f deps/sequencer/target/release/starknet_os_runner ] && echo "  starknet_os_runner: OK ($(du -h deps/sequencer/target/release/starknet_os_runner | cut -f1))" || echo "  starknet_os_runner: MISSING"
-[ -f deps/sequencer/target/release/shared_executables/starknet-sierra-compile ] && echo "  starknet-sierra-compile: OK ($(du -h deps/sequencer/target/release/shared_executables/starknet-sierra-compile | cut -f1))" || echo "  starknet-sierra-compile: MISSING"
+[ -n "$SIERRA_BIN" ] && echo "  starknet-sierra-compile: OK ($(du -h "$SIERRA_BIN" | cut -f1))" || echo "  starknet-sierra-compile: MISSING"
 [ -f deps/bin/bootloader_program.json ] && echo "  bootloader_program: OK ($(du -h deps/bin/bootloader_program.json | cut -f1))" || echo "  bootloader_program: MISSING"
 [ -f sequencer_venv/bin/cairo-compile ] && echo "  cairo-compile: OK" || echo "  cairo-compile: MISSING"
 
