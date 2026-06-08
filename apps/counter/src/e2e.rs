@@ -18,7 +18,7 @@ use snip36_core::Config;
 use crate::selectors::{GET_COUNTER_SELECTOR, INCREMENT_SELECTOR};
 
 use snip36_core::cli_util::{
-    format_cmd_output, parse_hex_from_output, parse_long_hex, SNCAST_RESOURCE_BOUND_ARGS,
+    format_cmd_output, parse_hex_from_output, parse_long_hex, sncast_resource_bound_args,
 };
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -230,6 +230,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         bail!("compilation failed");
     }
 
+    let (l1_gas_price, l1_data_gas_price, l2_gas_price) = rpc.get_gas_prices().await?;
+    info!(
+        "  Live gas prices for sncast resource bounds: l1={l1_gas_price}, l1_data={l1_data_gas_price}, l2={l2_gas_price}"
+    );
+    let sncast_args = sncast_resource_bound_args(l1_gas_price, l1_data_gas_price, l2_gas_price);
+
     // ==========================================
     // STEP 2: Declare the contract class
     // ==========================================
@@ -245,7 +251,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--contract-name",
             "Counter",
         ])
-        .args(SNCAST_RESOURCE_BOUND_ARGS)
+        .args(&sncast_args)
         .current_dir(&contracts_dir)
         .output()
         .await
@@ -297,7 +303,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--salt",
             &salt,
         ])
-        .args(SNCAST_RESOURCE_BOUND_ARGS)
+        .args(&sncast_args)
         .output()
         .await
         .wrap_err("failed to run sncast deploy")?;
