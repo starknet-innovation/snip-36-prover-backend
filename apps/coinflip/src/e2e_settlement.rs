@@ -17,7 +17,10 @@ use snip36_core::signing::{
 use snip36_core::types::{ResourceBounds, SubmitParams, BALANCE_OF_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
-use snip36_core::cli_util::{format_cmd_output, parse_hex_from_output, parse_long_hex};
+use snip36_core::cli_util::{
+    classify_sncast_failure, format_cmd_output, format_cmd_output_with_status,
+    parse_hex_from_output, parse_long_hex, run_sncast_with_retries, sncast_resource_bound_args,
+};
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -667,9 +670,17 @@ async fn declare_and_deploy(
     contract_name: &str,
     constructor_calldata: &str,
 ) -> Result<String> {
+    let (l1_gas_price, l1_data_gas_price, l2_gas_price) = rpc.get_gas_prices().await?;
+    info!(
+        "  Live gas prices for {contract_name} sncast resource bounds: l1={l1_gas_price}, l1_data={l1_data_gas_price}, l2={l2_gas_price}"
+    );
+    let sncast_args = sncast_resource_bound_args(l1_gas_price, l1_data_gas_price, l2_gas_price);
+
     // Declare
-    let declare_output = tokio::process::Command::new("sncast")
-        .args([
+    let declare_operation = format!("sncast declare {contract_name}");
+    let declare_output = run_sncast_with_retries(&declare_operation, || {
+        let mut cmd = tokio::process::Command::new("sncast");
+        cmd.args([
             "--account",
             account_name,
             "declare",
@@ -678,14 +689,22 @@ async fn declare_and_deploy(
             "--url",
             rpc_url,
         ])
-        .current_dir(contracts_dir)
-        .output()
-        .await?;
+        .args(&sncast_args)
+        .current_dir(contracts_dir);
+        cmd
+    })
+    .await?;
 
-    let declare_text = format_cmd_output(&declare_output);
+    let declare_text = format_cmd_output_with_status(&declare_output);
     let class_hash = parse_hex_from_output("class_hash", &declare_text)
         .or_else(|| parse_long_hex(&declare_text))
-        .ok_or_else(|| eyre::eyre!("{contract_name} declare failed: {declare_text}"))?;
+        .ok_or_else(|| {
+            let kind = classify_sncast_failure(declare_output.status.success(), &declare_text);
+            eyre::eyre!(
+                "{contract_name} declare failed ({}): {declare_text}",
+                kind.label()
+            )
+        })?;
 
     if let Some(tx) = parse_hex_from_output("transaction_hash", &declare_text) {
         let _ = rpc.wait_for_tx(&tx, 120, 3).await;
@@ -709,14 +728,23 @@ async fn declare_and_deploy(
         deploy_args.push(constructor_calldata.to_string());
     }
 
-    let deploy_output = tokio::process::Command::new("sncast")
-        .args(&deploy_args)
-        .output()
-        .await?;
+    let deploy_operation = format!("sncast deploy {contract_name}");
+    let deploy_output = run_sncast_with_retries(&deploy_operation, || {
+        let mut cmd = tokio::process::Command::new("sncast");
+        cmd.args(&deploy_args).args(&sncast_args);
+        cmd
+    })
+    .await?;
 
-    let deploy_text = format_cmd_output(&deploy_output);
-    let contract_address = parse_hex_from_output("contract_address", &deploy_text)
-        .ok_or_else(|| eyre::eyre!("{contract_name} deploy failed: {deploy_text}"))?;
+    let deploy_text = format_cmd_output_with_status(&deploy_output);
+    let contract_address =
+        parse_hex_from_output("contract_address", &deploy_text).ok_or_else(|| {
+            let kind = classify_sncast_failure(deploy_output.status.success(), &deploy_text);
+            eyre::eyre!(
+                "{contract_name} deploy failed ({}): {deploy_text}",
+                kind.label()
+            )
+        })?;
 
     if let Some(tx) = parse_hex_from_output("transaction_hash", &deploy_text) {
         let _ = rpc.wait_for_tx(&tx, 120, 3).await;
