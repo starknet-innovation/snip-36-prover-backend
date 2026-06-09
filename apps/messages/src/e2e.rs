@@ -17,7 +17,8 @@ use snip36_core::types::{ResourceBounds, SubmitParams};
 use snip36_core::Config;
 
 use snip36_core::cli_util::{
-    format_cmd_output, parse_hex_from_output, parse_long_hex, SNCAST_RESOURCE_BOUND_ARGS,
+    classify_sncast_failure, format_cmd_output, format_cmd_output_with_status,
+    parse_hex_from_output, parse_long_hex, run_sncast_with_retries, sncast_resource_bound_args,
 };
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -191,6 +192,11 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     // STEP 2: Declare Messenger class
     // ==========================================
     step(2, "Declare Messenger class");
+    let sncast_resource_bound_args = sncast_resource_bound_args(
+        &rpc.resource_bounds()
+            .await
+            .wrap_err("failed to fetch live gas prices for sncast resource bounds")?,
+    );
 
     // Compute class hash from compiled artifacts first
     let class_hash_output = tokio::process::Command::new("sncast")
@@ -217,8 +223,9 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
         info!("  Class hash: {h}");
         h
     } else {
-        let declare_output = tokio::process::Command::new("sncast")
-            .args([
+        let declare_output = run_sncast_with_retries("sncast declare Messenger", || {
+            let mut cmd = tokio::process::Command::new("sncast");
+            cmd.args([
                 "--account",
                 account_name,
                 "declare",
@@ -227,13 +234,14 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                 "--contract-name",
                 "Messenger",
             ])
-            .args(SNCAST_RESOURCE_BOUND_ARGS)
-            .current_dir(&contracts_dir)
-            .output()
-            .await
-            .wrap_err("failed to run sncast declare")?;
+            .args(&sncast_resource_bound_args)
+            .current_dir(&contracts_dir);
+            cmd
+        })
+        .await
+        .wrap_err("failed to run sncast declare")?;
 
-        let declare_combined = format_cmd_output(&declare_output);
+        let declare_combined = format_cmd_output_with_status(&declare_output);
         info!("  sncast declare output:");
         info!("  {declare_combined}");
 
@@ -252,8 +260,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
                 h
             }
             None => {
-                fail("Could not determine class hash");
-                bail!("declare failed");
+                let kind =
+                    classify_sncast_failure(declare_output.status.success(), &declare_combined);
+                fail(&format!(
+                    "Could not determine class hash ({})",
+                    kind.label()
+                ));
+                bail!("declare failed: {}", kind.label());
             }
         }
     };
@@ -264,8 +277,9 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     step(3, "Deploy messenger contract");
 
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
-    let deploy_output = tokio::process::Command::new("sncast")
-        .args([
+    let deploy_output = run_sncast_with_retries("sncast deploy Messenger", || {
+        let mut cmd = tokio::process::Command::new("sncast");
+        cmd.args([
             "--account",
             account_name,
             "deploy",
@@ -276,12 +290,13 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             "--salt",
             &salt,
         ])
-        .args(SNCAST_RESOURCE_BOUND_ARGS)
-        .output()
-        .await
-        .wrap_err("failed to run sncast deploy")?;
+        .args(&sncast_resource_bound_args);
+        cmd
+    })
+    .await
+    .wrap_err("failed to run sncast deploy")?;
 
-    let deploy_combined = format_cmd_output(&deploy_output);
+    let deploy_combined = format_cmd_output_with_status(&deploy_output);
     info!("  sncast deploy output:");
     info!("  {deploy_combined}");
 
@@ -298,8 +313,12 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
             addr
         }
         None => {
-            fail("Could not determine contract address");
-            bail!("deploy failed");
+            let kind = classify_sncast_failure(deploy_output.status.success(), &deploy_combined);
+            fail(&format!(
+                "Could not determine contract address after deploy ({})",
+                kind.label()
+            ));
+            bail!("deploy failed: {}", kind.label());
         }
     };
 

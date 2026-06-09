@@ -18,7 +18,8 @@ use snip36_core::Config;
 use crate::selectors::{GET_COUNTER_SELECTOR, INCREMENT_SELECTOR};
 
 use snip36_core::cli_util::{
-    format_cmd_output, parse_hex_from_output, parse_long_hex, SNCAST_RESOURCE_BOUND_ARGS,
+    classify_sncast_failure, format_cmd_output, format_cmd_output_with_status,
+    parse_hex_from_output, parse_long_hex, run_sncast_with_retries, sncast_resource_bound_args,
 };
 
 static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -235,8 +236,15 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // ==========================================
     step(2, "Declare contract class");
 
-    let declare_output = tokio::process::Command::new("sncast")
-        .args([
+    let sncast_resource_bound_args = sncast_resource_bound_args(
+        &rpc.resource_bounds()
+            .await
+            .wrap_err("failed to fetch live gas prices for sncast resource bounds")?,
+    );
+
+    let declare_output = run_sncast_with_retries("sncast declare Counter", || {
+        let mut cmd = tokio::process::Command::new("sncast");
+        cmd.args([
             "--account",
             &account_name,
             "declare",
@@ -245,13 +253,14 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--contract-name",
             "Counter",
         ])
-        .args(SNCAST_RESOURCE_BOUND_ARGS)
-        .current_dir(&contracts_dir)
-        .output()
-        .await
-        .wrap_err("failed to run sncast declare")?;
+        .args(&sncast_resource_bound_args)
+        .current_dir(&contracts_dir);
+        cmd
+    })
+    .await
+    .wrap_err("failed to run sncast declare")?;
 
-    let declare_combined = format_cmd_output(&declare_output);
+    let declare_combined = format_cmd_output_with_status(&declare_output);
     info!("  sncast declare output:");
     info!("  {declare_combined}");
 
@@ -274,8 +283,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             h
         }
         None => {
-            fail("Could not determine class hash");
-            bail!("declare failed");
+            let kind = classify_sncast_failure(declare_output.status.success(), &declare_combined);
+            fail(&format!(
+                "Could not determine class hash ({})",
+                kind.label()
+            ));
+            bail!("declare failed: {}", kind.label());
         }
     };
 
@@ -285,8 +298,9 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     step(3, "Deploy counter contract");
 
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
-    let deploy_output = tokio::process::Command::new("sncast")
-        .args([
+    let deploy_output = run_sncast_with_retries("sncast deploy Counter", || {
+        let mut cmd = tokio::process::Command::new("sncast");
+        cmd.args([
             "--account",
             &account_name,
             "deploy",
@@ -297,12 +311,13 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "--salt",
             &salt,
         ])
-        .args(SNCAST_RESOURCE_BOUND_ARGS)
-        .output()
-        .await
-        .wrap_err("failed to run sncast deploy")?;
+        .args(&sncast_resource_bound_args);
+        cmd
+    })
+    .await
+    .wrap_err("failed to run sncast deploy")?;
 
-    let deploy_combined = format_cmd_output(&deploy_output);
+    let deploy_combined = format_cmd_output_with_status(&deploy_output);
     info!("  sncast deploy output:");
     info!("  {deploy_combined}");
 
@@ -319,8 +334,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             addr
         }
         None => {
-            fail("Could not determine contract address");
-            bail!("deploy failed");
+            let kind = classify_sncast_failure(deploy_output.status.success(), &deploy_combined);
+            fail(&format!(
+                "Could not determine contract address after deploy ({})",
+                kind.label()
+            ));
+            bail!("deploy failed: {}", kind.label());
         }
     };
 
