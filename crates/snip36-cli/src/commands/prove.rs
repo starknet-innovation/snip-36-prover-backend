@@ -254,7 +254,6 @@ async fn run_virtual_os(
         // Run from the sequencer directory so resource files (prover_params.json etc.) are found
         let sequencer_dir = config.deps_dir.join("sequencer");
         cmd.current_dir(&sequencer_dir)
-            .env("CARGO_TOOLS_ROOT", config.compiler_tools_dir())
             .arg("--rpc-url")
             .arg(rpc_url)
             .arg("--chain-id")

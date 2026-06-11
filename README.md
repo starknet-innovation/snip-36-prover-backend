@@ -86,8 +86,6 @@ Downloads the prebuilt prover stack (stwo prover, virtual-OS runner, sierra
 compiler, bootloader) from the pinned `deps-v*` GitHub release for your
 platform (see [Supported Platforms](#supported-platforms)), verifies its
 checksum, and creates the Python venv for `cairo-compile`.
-The Sierra compiler is installed under `deps/compiler-tools` and passed to the
-runner via `CARGO_TOOLS_ROOT`, so the prebuilt runner is relocatable.
 `./scripts/download-deps.sh [TAG]` does the same without a built CLI.
 
 **From source (~30 minutes — contributors, or platforms without prebuilt assets):**
@@ -345,7 +343,7 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `main-v0.14.3` / `ac439437` — Virtual OS runner (zstd-compressed proofs)
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.2-RC.6` — Virtual OS runner (zstd-compressed proofs)
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `c0b937bb` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) @ `v2.2.0` — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing

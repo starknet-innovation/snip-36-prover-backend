@@ -11,7 +11,7 @@ use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
 const PROVING_UTILS_VERSION: &str = "c0b937bb19126255fbeeededbcaea4a84ae9f1c0";
-const SEQUENCER_TAG: &str = "ac43943748661c2b2d8bbb4a8314093a8ff00933";
+const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.6";
 const STWO_NIGHTLY: &str = "nightly-2025-07-14";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
@@ -70,15 +70,15 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     info!("=== SNIP-36 Virtual OS Stwo Prover -- Setup ===");
     info!("");
 
-    // [1/8] Check Rust toolchains
-    info!("[1/8] Checking Rust toolchains...");
+    // [1/7] Check Rust toolchains
+    info!("[1/7] Checking Rust toolchains...");
     check_rust_toolchain().await?;
     info!("  Installing {STWO_NIGHTLY} (required by stwo 2.2.0)...");
     run_cmd("rustup", &["toolchain", "install", STWO_NIGHTLY]).await?;
     info!("");
 
-    // [2/8] Clone/update proving-utils
-    info!("[2/8] Setting up proving-utils...");
+    // [2/7] Clone/update proving-utils
+    info!("[2/7] Setting up proving-utils...");
     tokio::fs::create_dir_all(deps_dir).await?;
     let proving_utils_dir = deps_dir.join("proving-utils");
 
@@ -128,21 +128,24 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     }
     info!("");
 
-    // [3/8] Clone/update sequencer
-    info!("[3/8] Setting up sequencer...");
+    // [3/7] Clone/update sequencer
+    info!("[3/7] Setting up sequencer...");
     let sequencer_dir = deps_dir.join("sequencer");
 
+    let sequencer_was_cloned = sequencer_dir.join(".git").exists();
     ensure_repo(
         &sequencer_dir,
         "https://github.com/starkware-libs/sequencer.git",
     )
     .await?;
-    run_cmd_in(
-        "git",
-        &["fetch", "--quiet", "--tags", "origin"],
-        &sequencer_dir,
-    )
-    .await?;
+    if !sequencer_was_cloned {
+        run_cmd_in(
+            "git",
+            &["fetch", "--quiet", "--tags", "origin"],
+            &sequencer_dir,
+        )
+        .await?;
+    }
 
     info!("  Checking out {SEQUENCER_TAG}...");
     run_cmd_in(
@@ -156,20 +159,15 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     apply_macos_patch(&sequencer_dir).await?;
     info!("");
 
-    // [4/8] Python venv
-    info!("[4/8] Setting up Python virtual environment...");
+    // [4/7] Python venv
+    info!("[4/7] Setting up Python virtual environment...");
     let requirements = sequencer_dir.join("scripts/requirements.txt");
     let venv_dir = ensure_venv(project_dir, &requirements).await?;
     info!("");
 
-    // [5/8] Install Sierra compiler sidecar
-    info!("[5/8] Installing starknet-sierra-compile...");
-    install_sierra_compiler(&sequencer_dir, &config.compiler_tools_dir()).await?;
-    info!("");
-
-    // [6/8] Build stwo-run-and-prove
+    // [5/7] Build stwo-run-and-prove
     if !args.skip_prover {
-        info!("[6/8] Building stwo-run-and-prove...");
+        info!("[5/7] Building stwo-run-and-prove...");
         let bin_dir = deps_dir.join("bin");
         tokio::fs::create_dir_all(&bin_dir).await?;
 
@@ -213,13 +211,13 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             bail!("stwo-run-and-prove binary not found after build");
         }
     } else {
-        info!("[6/8] Skipping stwo-run-and-prove build (--skip-prover)");
+        info!("[5/7] Skipping stwo-run-and-prove build (--skip-prover)");
     }
     info!("");
 
-    // [7/8] Build starknet_transaction_prover
+    // [6/7] Build starknet_transaction_prover
     if !args.skip_runner {
-        info!("[7/8] Building {RUNNER_PACKAGE} (requires {STWO_NIGHTLY} + venv)...");
+        info!("[6/7] Building {RUNNER_PACKAGE} (requires {STWO_NIGHTLY} + venv)...");
         info!("  This requires the stwo_proving feature and may take several minutes...");
 
         let pb = ProgressBar::new_spinner();
@@ -247,7 +245,6 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
                 "stwo_proving",
             ])
             .env("PATH", &path_env)
-            .env("CARGO_TOOLS_ROOT", config.compiler_tools_dir())
             .output()
             .await
             .wrap_err(format!("failed to build {RUNNER_PACKAGE}"))?;
@@ -277,12 +274,12 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             bail!("{RUNNER_BINARY} binary not found after build");
         }
     } else {
-        info!("[7/8] Skipping {RUNNER_PACKAGE} build (--skip-runner)");
+        info!("[6/7] Skipping {RUNNER_PACKAGE} build (--skip-runner)");
     }
     info!("");
 
-    // [8/8] Copy bootloader program
-    info!("[8/8] Locating bootloader program...");
+    // [7/7] Copy bootloader program
+    info!("[7/7] Locating bootloader program...");
     let bin_dir = deps_dir.join("bin");
     let bootloader_dst = bin_dir.join("bootloader_program.json");
 
@@ -331,24 +328,11 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         }
     }
 
-    if let Some(sierra) = config.sierra_compiler_bin() {
-        info!("  starknet-sierra-compile: {}", sierra.display());
-    } else {
-        bail!(
-            "starknet-sierra-compile missing under {}",
-            config.compiler_tools_dir().display()
-        );
-    }
-
     info!("");
     info!("=== Setup complete ===");
     info!("");
     info!("  Prover binary: {}", prover_bin.display());
     info!("  Runner binary: {}", runner_bin.display());
-    info!(
-        "  Compiler tools: {}",
-        config.compiler_tools_dir().display()
-    );
     info!("  Python venv:   {}", venv_dir.display());
     info!("");
     info!("  Next steps:");
@@ -473,24 +457,12 @@ async fn run_prebuilt(config: &Config) -> Result<()> {
         );
     }
     info!("  bootloader_program.json: OK");
-    if let Some(sierra) = config.sierra_compiler_bin() {
-        info!("  starknet-sierra-compile: {}", sierra.display());
-    } else {
-        bail!(
-            "starknet-sierra-compile missing under {} after extraction",
-            config.compiler_tools_dir().display()
-        );
-    }
 
     info!("");
     info!("=== Setup complete (prebuilt {EXPECTED_DEPS_TAG}) ===");
     info!("");
     info!("  Prover binary: {}", prover_bin.display());
     info!("  Runner binary: {}", runner_bin.display());
-    info!(
-        "  Compiler tools: {}",
-        config.compiler_tools_dir().display()
-    );
     info!("  Python venv:   {}", venv_dir.display());
     info!("");
     info!("  Next steps:");
@@ -601,24 +573,6 @@ async fn ensure_venv(project_dir: &Path, requirements: &Path) -> Result<std::pat
     Ok(venv_dir)
 }
 
-/// Install the sequencer's Sierra compiler sidecar into a project-local cargo
-/// tools root. Sequencer v0.14.3 resolves this path at runtime from
-/// CARGO_TOOLS_ROOT instead of from a compile-time OUT_DIR.
-async fn install_sierra_compiler(sequencer_dir: &Path, compiler_tools_dir: &Path) -> Result<()> {
-    tokio::fs::create_dir_all(compiler_tools_dir).await?;
-    let status = tokio::process::Command::new("bash")
-        .args(["scripts/install_compiler_binaries.sh", "--sierra"])
-        .current_dir(sequencer_dir)
-        .env("CARGO_TOOLS_ROOT", compiler_tools_dir)
-        .status()
-        .await
-        .wrap_err("failed to run sequencer compiler installer")?;
-    if !status.success() {
-        bail!("starknet-sierra-compile installer exited with {status}");
-    }
-    Ok(())
-}
-
 /// Stream a URL to a local file with a progress bar.
 async fn download_to_file(url: &str, dest: &Path) -> Result<()> {
     use tokio::io::AsyncWriteExt;
@@ -706,26 +660,16 @@ async fn layout_prebuilt(deps_dir: &Path) -> Result<()> {
         tokio::fs::copy(&os_runner, &tx_prover).await?;
     }
 
-    // deps-v5+ tarballs ship the v0.14.3 compiler sidecar in the versioned
-    // CARGO_TOOLS_ROOT layout expected by the runner at runtime.
-    let compiler_tools_src = bin_dir.join("compiler-tools");
-    let compiler_tools_dst = deps_dir.join("compiler-tools");
-    if compiler_tools_src.exists() {
-        if compiler_tools_dst.exists() {
-            tokio::fs::remove_dir_all(&compiler_tools_dst).await?;
-        }
-        tokio::fs::rename(&compiler_tools_src, &compiler_tools_dst).await?;
-    }
-
-    // Clean up the older deps-v4 shared_executables layout if a caller
-    // explicitly extracts an older bundle with this newer CLI.
+    // starknet-sierra-compile: deps-v4+ tarballs ship it flat at
+    // shared_executables/; older tags nest it under shared_executables/bin/.
+    // Accept both.
     let sierra_dir = release_dir.join("shared_executables");
+    tokio::fs::create_dir_all(&sierra_dir).await?;
     for src in [
         bin_dir.join("shared_executables/starknet-sierra-compile"),
         bin_dir.join("shared_executables/bin/starknet-sierra-compile"),
     ] {
         if src.exists() {
-            tokio::fs::create_dir_all(&sierra_dir).await?;
             tokio::fs::rename(&src, sierra_dir.join("starknet-sierra-compile")).await?;
             break;
         }
@@ -745,28 +689,8 @@ async fn layout_prebuilt(deps_dir: &Path) -> Result<()> {
                 tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).await?;
             }
         }
-        if let Some(sierra) = find_sierra_compiler_sync(&deps_dir.join("compiler-tools")) {
-            tokio::fs::set_permissions(&sierra, std::fs::Permissions::from_mode(0o755)).await?;
-        }
     }
     Ok(())
-}
-
-fn find_sierra_compiler_sync(root: &Path) -> Option<std::path::PathBuf> {
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("starknet-sierra-compile-") {
-            continue;
-        }
-        let binary = path.join("bin/starknet-sierra-compile");
-        if binary.exists() {
-            return Some(binary);
-        }
-    }
-    None
 }
 
 async fn check_rust_toolchain() -> Result<()> {

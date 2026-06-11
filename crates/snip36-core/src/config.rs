@@ -115,36 +115,6 @@ impl Config {
         os_runner
     }
 
-    /// Root for compiler sidecar binaries used by the sequencer runner.
-    ///
-    /// Sequencer v0.14.3 resolves `starknet-sierra-compile` from
-    /// `$CARGO_TOOLS_ROOT/<binary>-<version>/bin/<binary>`. Keep this under
-    /// `deps/` so prebuilt bundles are relocatable and do not depend on the
-    /// user's global cargo home.
-    pub fn compiler_tools_dir(&self) -> PathBuf {
-        self.deps_dir.join("compiler-tools")
-    }
-
-    /// Find an installed starknet-sierra-compile sidecar in compiler_tools_dir.
-    pub fn sierra_compiler_bin(&self) -> Option<PathBuf> {
-        let root = self.compiler_tools_dir();
-        let entries = std::fs::read_dir(root).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if !name.starts_with("starknet-sierra-compile-") {
-                continue;
-            }
-            let binary = path.join("bin/starknet-sierra-compile");
-            if binary.exists() {
-                return Some(binary);
-            }
-        }
-        None
-    }
-
     /// Path to the bootloader program JSON.
     pub fn bootloader_program(&self) -> PathBuf {
         self.deps_dir.join("bin/bootloader_program.json")

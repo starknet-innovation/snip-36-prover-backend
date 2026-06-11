@@ -96,17 +96,17 @@ pub async fn run(_args: DoctorArgs, env_file: Option<&Path>) -> Result<()> {
 
     // Sierra compiler (invoked by the runner; no --help contract, so presence
     // + executable bit only).
-    if let Some(sierra) = config.sierra_compiler_bin() {
-        checks.pass(
-            "starknet-sierra-compile",
-            &format!("at {}", sierra.display()),
-        );
+    let sierra = config
+        .deps_dir
+        .join("sequencer/target/release/shared_executables/starknet-sierra-compile");
+    if sierra.exists() {
+        checks.pass("starknet-sierra-compile", "");
     } else {
         checks.fail(
             "starknet-sierra-compile",
             &format!(
-                "missing under {} — run `snip36 setup --prebuilt`",
-                config.compiler_tools_dir().display()
+                "missing at {} — run `snip36 setup --prebuilt`",
+                sierra.display()
             ),
         );
     }

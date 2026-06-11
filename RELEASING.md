@@ -48,8 +48,7 @@ total).
 
 Just the external prebuilt binaries (`stwo-run-and-prove`,
 `starknet_transaction_prover` / `starknet_os_runner` alias,
-`starknet-sierra-compile` under `compiler-tools/`, `bootloader_program.json`).
-This is what
+`starknet-sierra-compile`, `bootloader_program.json`). This is what
 `scripts/download-deps.sh` downloads. Cut a new one **whenever the pins
 change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
 
@@ -57,8 +56,8 @@ change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
 2. Tag and push (incrementing N), or run the workflow manually:
    ```bash
-   git tag deps-v5 && git push origin deps-v5
-   # or: gh workflow run build-deps.yml -f tag=deps-v5
+   git tag deps-v4 && git push origin deps-v4
+   # or: gh workflow run build-deps.yml -f tag=deps-v4
    ```
 3. After it publishes, bump the **`deps-version` file at the repo root** to
    the new tag. That file is the single source of truth for which deps

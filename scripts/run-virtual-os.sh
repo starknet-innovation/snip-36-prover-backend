@@ -7,7 +7,6 @@ DEPS_DIR="$PROJECT_DIR/deps"
 OUTPUT_DIR="$PROJECT_DIR/output"
 VENV_DIR="$PROJECT_DIR/sequencer_venv"
 STWO_NIGHTLY="nightly-2025-07-14"
-export CARGO_TOOLS_ROOT="${CARGO_TOOLS_ROOT:-$DEPS_DIR/compiler-tools}"
 
 usage() {
     echo "Usage: $0 --block-number <N> --tx-hash <HASH> --rpc-url <URL> [OPTIONS]"
@@ -142,12 +141,6 @@ else
         (
             if [ -d "$VENV_DIR" ]; then
                 export PATH="$VENV_DIR/bin:$PATH"
-            fi
-            if [ -x "$DEPS_DIR/sequencer/scripts/install_compiler_binaries.sh" ]; then
-                (
-                    cd "$DEPS_DIR/sequencer"
-                    bash scripts/install_compiler_binaries.sh --sierra
-                )
             fi
             cargo +"$STWO_NIGHTLY" build --release \
                 --manifest-path "$DEPS_DIR/sequencer/Cargo.toml" \
