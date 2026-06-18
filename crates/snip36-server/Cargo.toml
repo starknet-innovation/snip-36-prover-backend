@@ -24,7 +24,7 @@ eyre = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 axum = { version = "0.8", features = ["macros"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 dashmap = "6"
 regex-lite = "0.1"
 uuid = { version = "1", features = ["v4"] }
