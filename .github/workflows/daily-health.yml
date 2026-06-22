@@ -35,7 +35,7 @@ concurrency:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.6
+  SEQUENCER_TAG: ac43943748661c2b2d8bbb4a8314093a8ff00933
   PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
   STWO_NIGHTLY: nightly-2025-07-14
   SCARB_VERSION: 2.15.0
@@ -137,6 +137,7 @@ jobs:
              && sequencer_venv/bin/pip install --quiet -r /tmp/seq-requirements.txt \
              && [ -x sequencer_venv/bin/cairo-compile ] \
              && [ -x deps/sequencer/target/release/starknet_transaction_prover ] \
+             && [ -n "$(find deps/compiler-tools -path '*/bin/starknet-sierra-compile' -type f -perm -111 | head -n 1)" ] \
              && [ -x deps/bin/stwo-run-and-prove ]; then
             echo "Provisioned deps from prebuilt release $DEPS_RELEASE_TAG"
           else
