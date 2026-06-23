@@ -16,7 +16,7 @@ exclude = ["extractor"]
 [workspace.package]
 # Single source of truth for the version of all workspace members. Bump here
 # (then `cargo build` to refresh Cargo.lock) and tag `v<this>` to release.
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
