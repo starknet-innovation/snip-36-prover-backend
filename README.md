@@ -52,8 +52,8 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 | Linux x86_64 | ✅ `linux-x86_64` | ✅ native `linux/amd64` |
 | Linux arm64 (aarch64) | ✅ `linux-arm64` | ✅ native `linux/arm64`* |
 
-\* multi-arch image ships with the next `v*` release; earlier image tags are
-amd64-only (run emulated on ARM hosts).
+\* `v*` releases built with the current workflow publish a multi-arch image;
+older image tags from before that switch may be amd64-only.
 
 > **macOS note:** release assets downloaded with a browser (rather than
 > `curl` / `download-deps.sh`) carry the Gatekeeper quarantine attribute.
@@ -67,8 +67,8 @@ amd64-only (run emulated on ARM hosts).
 cargo build --release -p snip36-cli
 ```
 
-Or skip the Rust toolchain entirely and install a prebuilt CLI (available
-from the next `v*` release onward):
+Or skip the Rust toolchain entirely and install a prebuilt CLI from a `v*`
+GitHub release:
 
 ```bash
 curl -fsSL https://github.com/starknet-innovation/snip-36-prover-backend/releases/latest/download/install.sh | sh
@@ -102,23 +102,25 @@ This clones the sequencer and proving-utils repos, installs the nightly Rust too
 
 ```bash
 cp .env.example .env
-# Edit .env with your account address, private key, RPC URL, and gateway URL
+# Edit .env with your account address, private key, and RPC URL
 ```
 
 Required variables:
 - `STARKNET_RPC_URL` — JSON-RPC endpoint (Alchemy, Dwellir, etc., spec v0.8+)
 - `STARKNET_ACCOUNT_ADDRESS` — Sender account (hex)
 - `STARKNET_PRIVATE_KEY` — Signing key (hex)
-- `STARKNET_GATEWAY_URL` — Sequencer gateway for proof submission
-  (`https://alpha-sepolia.starknet.io` or `https://alpha-mainnet.starknet.io`).
-  Required because RPC nodes don't yet support compressed proofs.
 
 Optional:
 - `STARKNET_CHAIN_ID` — `SN_SEPOLIA` (default) or `SN_MAIN`. Must match the
-  network of your RPC + gateway — signatures are computed over this chain ID,
+  network of your RPC/gateway endpoint — signatures are computed over this chain ID,
   so a mismatch produces `Account: invalid signature`.
+- `STARKNET_GATEWAY_URL` — Sequencer gateway
+  (`https://alpha-sepolia.starknet.io` or `https://alpha-mainnet.starknet.io`).
+  Counter/messages e2e flows use this when set and otherwise fall back to RPC;
+  CoinFlip settlement/playground submission paths expect it. The standalone
+  `snip36 submit` command currently submits through RPC.
 - `PROVER_URL` — remote prover JSON-RPC endpoint. If set, `snip36` skips the
-  local `starknet_os_runner` and sends `starknet_proveTransaction` to this URL
+  local virtual-OS runner and sends `starknet_proveTransaction` to this URL
   instead.
 
 ### 4. Check the stack, then run the health check
@@ -181,8 +183,8 @@ Interactive web UI for developers to explore the SNIP-36 proving pipeline:
 # Backend (Rust):
 cargo run --release -p snip36-playground
 
-# Frontend (React):
-cd web/frontend && npm install && npm run dev
+# Frontend (React, in another terminal):
+cd web/frontend && npm install && npm exec vite
 ```
 
 Open http://localhost:3000
@@ -195,10 +197,11 @@ in-container. The entrypoint is `snip36`, so arguments pass straight through:
 
 ```bash
 docker run --rm \
-  -e STARKNET_RPC_URL=... -e STARKNET_ACCOUNT_ADDRESS=... \
-  -e STARKNET_PRIVATE_KEY=... -e STARKNET_GATEWAY_URL=... \
+  -e STARKNET_RPC_URL=https://... \
+  -e STARKNET_ACCOUNT_ADDRESS=0x... \
+  -e STARKNET_PRIVATE_KEY=0x... \
   ghcr.io/starknet-innovation/snip-36-prover-backend:latest \
-  prove virtual-os --tx-hash 0x... --block-number N
+  prove virtual-os --tx-hash 0x... --block-number N --rpc-url https://...
 ```
 
 The image bundles the stwo prover, virtual-OS runner, sierra compiler, and
@@ -263,7 +266,7 @@ After proving, the pipeline generates these files alongside the proof:
 
 | File | Description | When generated |
 |------|-------------|----------------|
-| `*.proof` | Base64-encoded stwo proof (zstd-compressed) | Always |
+| `*.proof` | Base64-encoded stwo binary proof | Always |
 | `*.proof_facts` | JSON array of hex field elements (proof identity) | Always |
 | `*.raw_messages.json` | L2→L1 messages emitted by the virtual transaction | Only when messages exist |
 
@@ -315,7 +318,7 @@ snip36 e2e-coinflip --env-file .env --bet 0
 snip36 e2e-coinflip --env-file .env --bet 1 --prove-only
 ```
 
-The test deploys the CoinFlip contract, proves a round, and verifies the settlement message matches the expected Poseidon hash computation client-side.
+The test deploys the CoinFlip contract, proves a round, and verifies the settlement message matches the expected Pedersen hash computation client-side.
 
 ## Project Structure
 
@@ -345,9 +348,9 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `APOLLO-0.14.3-RC.12` / `9f78ee7` — Virtual OS runner (version-prefixed, zstd-compressed proofs)
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `APOLLO-0.14.3-RC.12` / `9f78ee7` — Virtual OS transaction prover
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `3035dd00` — stwo-run-and-prove binary
-- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) @ `v2.2.0` — Circle STARK prover
+- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `489a0f3e` — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
 
 ## License

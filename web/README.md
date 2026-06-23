@@ -25,12 +25,12 @@ cp .env.example .env
 #   STARKNET_RPC_URL, STARKNET_ACCOUNT_ADDRESS, STARKNET_PRIVATE_KEY
 
 # 2. Start the backend (Rust) — imports sncast account automatically on startup
-cargo run --release -p snip36-server
+cargo run --release -p snip36-playground
 
 # 3. Start the frontend (in another terminal)
 cd web/frontend
 npm install
-npm run dev
+npm exec vite
 ```
 
 Open http://localhost:3000
