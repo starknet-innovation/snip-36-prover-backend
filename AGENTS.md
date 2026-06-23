@@ -12,7 +12,7 @@ Rust workspace split into reusable SDK crates and example apps built on top of t
 
 **SDK (`crates/`) — use-case-independent infrastructure:**
 - `crates/snip36-core/` — Pure library: typed config, Starknet RPC client, SNIP-36 signing, proof encoding/types
-- `crates/snip36-cli/` — Unified CLI (`snip36`); owns generic subcommands (prove, submit, deploy, fund, setup, extract) and dispatches health/e2e to the apps
+- `crates/snip36-cli/` — Unified CLI (`snip36`); owns generic subcommands (prove, submit, deploy, fund, setup, doctor, extract) and dispatches health/e2e to the apps
 - `crates/snip36-server/` — Server library: generic Axum routes + `AppState` (composed by app server binaries)
 
 **Apps (`apps/`) — example applications built on the SDK:**
@@ -26,7 +26,7 @@ Rust workspace split into reusable SDK crates and example apps built on top of t
 - `web/frontend/` — React + TypeScript playground UI
 - `web/coinflip/` — CoinFlip demo UI
 - `tests/contracts/` — Cairo test contracts (Counter, Messenger, CoinFlip, CoinFlipBank) for E2E tests
-- `scripts/` — Shell scripts for external binary orchestration (setup, prove, run-virtual-os)
+- `scripts/` — Helper scripts for dependency downloads, version checks, smoke tests, virtual-OS runs, and mainnet account deployment
 - `sample-input/` — Template inputs for the prover and bootloader
 - `deps/` — (generated, gitignored) Cloned repos: `proving-utils`, `sequencer`
 
@@ -47,8 +47,9 @@ cargo build --workspace                 # Build all crates + apps
 cargo build --release -p snip36-cli     # Build the CLI
 cargo build --release -p snip36-playground  # Build the web backend binary
 
-# External dependencies (stwo prover, starknet_os_runner):
-snip36 setup                         # Install external deps
+# External dependencies (stwo prover, virtual-OS runner):
+snip36 setup --prebuilt              # Download pinned prebuilt deps
+snip36 setup                         # Build external deps from source
 ```
 
 ## CLI Usage
@@ -56,12 +57,15 @@ snip36 setup                         # Install external deps
 ```bash
 snip36 prove virtual-os --block-number N --tx-hash 0x... --rpc-url URL
 snip36 prove program --program file.json --output proof.out
+snip36 prove pie --pie file.pie.zip --output proof.out
 snip36 submit --proof proof.b64 --proof-facts facts.json --calldata 0x1,0x2 --contract-address 0x...
 snip36 deploy account --public-key 0x...
 snip36 fund --to 0x... --amount 10000000000000000000
 snip36 health
 snip36 health --quick
-snip36 setup
+snip36 doctor               # Offline proving-stack check (no RPC/keys)
+snip36 setup --prebuilt
+snip36 extract
 snip36 e2e
 snip36 e2e-messages          # E2E test for L2→L1 messages (messenger contract)
 snip36 e2e-coinflip          # Provable coin flip example (off-chain game)
@@ -110,8 +114,9 @@ snip36 e2e-coinflip    # provable coin flip: deploy CoinFlip → prove → verif
 snip36 e2e-settlement  # full settlement: deposit → prove → settle → payout
 ```
 
-Tier 2 requires `snip36 setup` (or `./scripts/download-deps.sh deps-v3` for the
-prebuilt binaries), a funded account, and RPC + gateway in `.env`. In CI it is
+Tier 2 requires `snip36 setup --prebuilt` (or `./scripts/download-deps.sh`,
+which reads the pinned `deps-version`) or a source-built stack from
+`snip36 setup`, plus a funded account and RPC + gateway in `.env`. In CI it is
 **not** a per-PR gate — it runs on the daily schedule, on `workflow_dispatch`,
 and on PRs labelled `run-e2e` (see `.github/workflows/daily-health.yml`).
 Changes to the proving/submission path ultimately need Tier 2, but extract the
@@ -137,7 +142,8 @@ Full procedure (bump → tag → what each tag publishes, and keeping the pins /
 
 - `.env` contains secrets (RPC URL, private key) — never commit
 - `.env.example` shows required variables
-- Target network: Starknet Sepolia
+- Default target network: Starknet Sepolia. Mainnet is supported by setting
+  `STARKNET_CHAIN_ID=SN_MAIN` and matching RPC/gateway/account settings.
 
 ## Working with Proofs
 
