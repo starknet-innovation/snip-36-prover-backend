@@ -23,9 +23,15 @@ the extractor sync (`ci.yml`), and the `build-deps.yml` preflight job fails a
 
 ## `v<x.y.z>` — application release
 
-Publishes the `snip36` CLI + `snip36-playground` binaries **and** the matching
-prebuilt deps, for all three platforms, plus a `SHA256SUMS` file (7 assets
-total).
+Publishes the `snip36` CLI + `snip36-playground` binaries and re-attaches the
+pinned prebuilt deps from the `deps-version` release, for all three platforms,
+plus a `SHA256SUMS` file (7 assets total). App releases do **not** rebuild the
+external prover deps.
+
+Before tagging a `v*` release, make sure `deps-version` points to an existing
+`deps-v*` release for the current `SEQUENCER_TAG`, `PROVING_UTILS_REV`, and
+`STWO_NIGHTLY` pins. If any of those pins changed, cut a new `deps-v*` release
+first, then update `deps-version` before the app release.
 
 1. Bump `version` in `[workspace.package]` (and `extractor/Cargo.toml`).
 2. `cargo build --workspace` to refresh `Cargo.lock`.
@@ -34,9 +40,10 @@ total).
    ```bash
    git tag v1.2.0 && git push origin v1.2.0
    ```
-5. `build-deps.yml` runs (~30–40 min) and:
+5. `build-deps.yml` runs and:
    - creates the GitHub release with `snip36-<platform>.tar.gz` (`snip36` +
-     `snip36-playground`) and `snip36-deps-<platform>.tar.gz` (prebuilt deps);
+     `snip36-playground`) and `snip36-deps-<platform>.tar.gz` copied from the
+     pinned `deps-version` release;
    - builds, smoke-tests (natively per arch), and pushes the all-in-one
      `snip36` CLI image (CLI + proving stack; no playground server) to
      `ghcr.io/starknet-innovation/snip-36-prover-backend:<x.y.z>` and `:latest`
@@ -51,7 +58,8 @@ Just the external prebuilt binaries (`stwo-run-and-prove`,
 `starknet-sierra-compile` under `compiler-tools/`, `bootloader_program.json`).
 This is what
 `scripts/download-deps.sh` downloads. Cut a new one **whenever the pins
-change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
+change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY` — or when
+the dependency artifact layout changes.
 
 1. Update the pins in **both** `build-deps.yml` and `daily-health.yml`
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
@@ -68,6 +76,10 @@ change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
 
 > The pins and `deps-version` must agree — otherwise CI/local setup fetches
 > binaries built from different pins.
+
+`v*` releases verify this in preflight: the pinned `deps-v*` release must exist,
+publish all three platform tarballs plus `SHA256SUMS`, and mention the current
+dependency pins in its release notes.
 
 ## Notes
 

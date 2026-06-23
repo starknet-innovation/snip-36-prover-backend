@@ -1,15 +1,12 @@
 name: Build & Release
 
-# Builds the snip36 binaries (snip36 CLI, snip36-playground) plus the prebuilt
-# external dependencies (stwo-run-and-prove, starknet_transaction_prover,
-# starknet-sierra-compile under compiler-tools/, bootloader_program.json) for
-# macOS (arm64) and Linux (x86_64, arm64), then publishes them as GitHub
-# Release assets together with a SHA256SUMS file.
+# Builds release assets for macOS (arm64) and Linux (x86_64, arm64), then
+# publishes them as GitHub Release assets together with a SHA256SUMS file.
 #
 # Tags:
 #   v<x.y.z>  — application release: publishes the snip36 binaries AND the
-#               matching prebuilt deps for both platforms. Must equal the
-#               workspace version in Cargo.toml.
+#               pinned prebuilt deps from the deps-version release. Must equal
+#               the workspace version in Cargo.toml.
 #   deps-v<n> — prebuilt dependency bundle only (what scripts/download-deps.sh
 #               consumes). Cut a new one when the pins below change.
 # Or run manually via workflow_dispatch with a `tag` input.
@@ -35,10 +32,14 @@ env:
   STWO_NIGHTLY: nightly-2026-01-15
 
 jobs:
-  # Fail fast — before the ~40-minute builds — when a v* tag doesn't match the
-  # workspace version, or extractor/Cargo.toml drifted from it.
+  # Fail fast when a v* tag doesn't match the workspace version, when
+  # extractor/Cargo.toml drifted from it, or when an app release points at a
+  # missing/mismatched deps-v* release.
   preflight:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      deps_tag: ${{ steps.deps-tag.outputs.deps_tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -53,6 +54,49 @@ jobs:
 
       - name: Check versions
         run: ./scripts/check-versions.sh "${{ steps.tag.outputs.tag }}"
+
+      - name: Determine pinned deps release
+        id: deps-tag
+        run: |
+          set -euo pipefail
+          deps_tag="$(cat deps-version)"
+          case "$deps_tag" in
+            deps-v*) ;;
+            *)
+              echo "deps-version must contain a deps-v* tag, got: $deps_tag" >&2
+              exit 1
+              ;;
+          esac
+          echo "deps_tag=$deps_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check pinned deps release
+        if: ${{ !startsWith(steps.tag.outputs.tag, 'deps-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deps_tag="${{ steps.deps-tag.outputs.deps_tag }}"
+
+          body="$(gh release view "$deps_tag" --repo "${{ github.repository }}" --json body --jq '.body // ""')"
+          for expected in "$SEQUENCER_TAG" "$PROVING_UTILS_REV" "$STWO_NIGHTLY"; do
+            if ! grep -Fq "$expected" <<<"$body"; then
+              echo "Pinned deps release $deps_tag does not mention expected pin: $expected" >&2
+              echo "Cut a new deps-v* release for the current pins, then update deps-version." >&2
+              exit 1
+            fi
+          done
+
+          assets="$(gh release view "$deps_tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')"
+          for asset in \
+            snip36-deps-linux-x86_64.tar.gz \
+            snip36-deps-linux-arm64.tar.gz \
+            snip36-deps-darwin-arm64.tar.gz \
+            SHA256SUMS; do
+            if ! grep -Fxq "$asset" <<<"$assets"; then
+              echo "Pinned deps release $deps_tag is missing asset: $asset" >&2
+              exit 1
+            fi
+          done
 
   build:
     needs: preflight
@@ -73,7 +117,9 @@ jobs:
 
       - name: Install Rust toolchains
         uses: dtolnay/rust-toolchain@stable
-      - run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
+      - name: Install stwo nightly toolchain
+        if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
 
       - name: Cache cargo artifacts
         uses: actions/cache@v5
@@ -100,13 +146,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build snip36 binaries
+      - name: Build snip36 release binaries
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: cargo build --release -p snip36-cli -p snip36-playground
 
+      - name: Build snip36 setup binary
+        if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        run: cargo build --release -p snip36-cli
+
       - name: Run setup (builds prover + runner)
+        if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: ./target/release/snip36 setup
 
       - name: Package application binaries
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: |
           set -euo pipefail
           mkdir -p app
@@ -117,6 +170,7 @@ jobs:
           tar czf snip36-${{ matrix.target }}.tar.gz -C app .
 
       - name: Package dependency binaries
+        if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: |
           set -euo pipefail
 
@@ -150,6 +204,66 @@ jobs:
           find dist -maxdepth 4 -type f -print -exec ls -lh {} \;
           tar czf snip36-deps-${{ matrix.target }}.tar.gz -C dist .
 
+      - name: Download pinned prebuilt deps
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deps_tag="${{ needs.preflight.outputs.deps_tag }}"
+          asset="snip36-deps-${{ matrix.target }}.tar.gz"
+
+          mkdir -p prebuilt-deps
+          gh release download "$deps_tag" \
+            --repo "${{ github.repository }}" \
+            --pattern "$asset" \
+            --pattern SHA256SUMS \
+            --dir prebuilt-deps
+
+          expected="$(awk -v f="$asset" '$2 == f {print $1}' prebuilt-deps/SHA256SUMS)"
+          if [ -z "$expected" ]; then
+            echo "$deps_tag SHA256SUMS has no entry for $asset" >&2
+            exit 1
+          fi
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "prebuilt-deps/$asset" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "prebuilt-deps/$asset" | awk '{print $1}')"
+          fi
+
+          if [ "$actual" != "$expected" ]; then
+            echo "Checksum mismatch for $asset from $deps_tag" >&2
+            echo "  expected: $expected" >&2
+            echo "  actual:   $actual" >&2
+            exit 1
+          fi
+
+          cp "prebuilt-deps/$asset" "$asset"
+
+      - name: Unpack pinned prebuilt deps
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          tar xzf snip36-deps-${{ matrix.target }}.tar.gz -C dist
+
+          test -x dist/stwo-run-and-prove
+          test -x dist/starknet_transaction_prover
+          test -x dist/starknet_os_runner
+          test -f dist/bootloader_program.json
+          test -n "$(find dist/compiler-tools -path '*/bin/starknet-sierra-compile' -type f -perm -111 | head -n 1)"
+
+      - name: Install cairo-compile for prebuilt deps smoke test
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        run: |
+          set -euo pipefail
+          python3.12 -m venv sequencer_venv
+          curl -fsSL "https://raw.githubusercontent.com/starkware-libs/sequencer/${SEQUENCER_TAG}/scripts/requirements.txt" -o /tmp/seq-requirements.txt
+          sequencer_venv/bin/pip install --quiet -r /tmp/seq-requirements.txt
+          test -x sequencer_venv/bin/cairo-compile
+
       # Prove + verify a tiny fixture with the binaries we just packaged, on this
       # job's own architecture. Offline (no network/secrets); catches a prover
       # stack that builds but cannot actually prove — previously the only check
@@ -158,6 +272,7 @@ jobs:
         run: ./scripts/smoke-test-deps.sh dist
 
       - name: Upload application artifact
+        if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         uses: actions/upload-artifact@v7
         with:
           name: snip36-${{ matrix.target }}
@@ -170,7 +285,7 @@ jobs:
           path: snip36-deps-${{ matrix.target }}.tar.gz
 
   release:
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -200,17 +315,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p checksums
-          DEPS="snip36-deps-linux-x86_64 snip36-deps-linux-arm64 snip36-deps-darwin-arm64"
-          APPS="snip36-linux-x86_64 snip36-linux-arm64 snip36-darwin-arm64"
-          if [[ "${{ steps.tag.outputs.tag }}" == deps-v* ]]; then
-            FILES="$DEPS"
+          tag="${{ needs.preflight.outputs.tag }}"
+          deps=(snip36-deps-linux-x86_64 snip36-deps-linux-arm64 snip36-deps-darwin-arm64)
+          apps=(snip36-linux-x86_64 snip36-linux-arm64 snip36-darwin-arm64)
+          if [[ "$tag" == deps-v* ]]; then
+            files=("${deps[@]}")
           else
-            FILES="$APPS $DEPS"
+            files=("${apps[@]}" "${deps[@]}")
           fi
-          for f in $FILES; do
+          for f in "${files[@]}"; do
             cp "artifacts/$f/$f.tar.gz" checksums/
           done
-          (cd checksums && sha256sum *.tar.gz > SHA256SUMS)
+          (cd checksums && sha256sum -- *.tar.gz > SHA256SUMS)
           cat checksums/SHA256SUMS
 
       # Both paths use softprops/action-gh-release (GitHub API, no git checkout
@@ -288,6 +404,7 @@ jobs:
               `bootloader_program.json`
             - sequencer `${{ env.SEQUENCER_TAG }}`, proving-utils
               `${{ env.PROVING_UTILS_REV }}`, nightly `${{ env.STWO_NIGHTLY }}`
+            - reused from `${{ needs.preflight.outputs.deps_tag }}`
 
             Platforms: linux-x86_64, linux-arm64, darwin-arm64.
           files: |
@@ -307,8 +424,8 @@ jobs:
   # prover), pushes the per-arch image by digest, and docker-manifest stitches
   # the digests into one multi-arch manifest. See Dockerfile.
   docker:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    needs: build
+    if: ${{ startsWith(needs.preflight.outputs.tag, 'v') }}
+    needs: [preflight, build]
     strategy:
       matrix:
         include:
@@ -393,8 +510,8 @@ jobs:
 
   # Stitch the per-arch digests into one multi-arch manifest and tag it.
   docker-manifest:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    needs: docker
+    if: ${{ startsWith(needs.preflight.outputs.tag, 'v') }}
+    needs: [preflight, docker]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -402,7 +519,9 @@ jobs:
     steps:
       - name: Image version
         id: meta
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          tag="${{ needs.preflight.outputs.tag }}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -422,12 +541,12 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/${{ github.repository }}
-          REFS=""
+          refs=()
           for f in /tmp/digests/*; do
-            REFS="$REFS $IMAGE@sha256:$(basename "$f")"
+            refs+=("$IMAGE@sha256:$(basename "$f")")
           done
           docker buildx imagetools create \
             -t "$IMAGE:${{ steps.meta.outputs.version }}" \
             -t "$IMAGE:latest" \
-            $REFS
+            "${refs[@]}"
           docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"

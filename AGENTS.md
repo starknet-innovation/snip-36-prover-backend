@@ -123,15 +123,15 @@ Version is single-sourced in `[workspace.package]` (root `Cargo.toml`); members
 inherit via `version.workspace = true`. Two tag schemes, both handled by
 `.github/workflows/build-deps.yml`:
 - `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries,
-  the matching prebuilt deps, **and** an all-in-one `snip36` CLI Docker image
-  (CLI + proving stack, no playground) to
+  reuses the pinned prebuilt deps from `deps-version`, **and** publishes an
+  all-in-one `snip36` CLI Docker image (CLI + proving stack, no playground) to
   `ghcr.io/.../snip-36-prover-backend:<x.y.z>` + `:latest` (see `Dockerfile`).
   Must equal the workspace version.
 - `deps-v<n>` — prebuilt dependency bundle only (what `download-deps.sh` pulls);
-  cut a new one when the pins change.
+  cut a new one when the pins or dependency artifact layout change.
 
 Full procedure (bump → tag → what each tag publishes, and keeping the pins /
-`DEPS_RELEASE_TAG` / `download-deps.sh` default in sync): see **`RELEASING.md`**.
+`deps-version` / `download-deps.sh` default in sync): see **`RELEASING.md`**.
 
 ## Environment
 
