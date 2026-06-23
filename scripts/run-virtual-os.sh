@@ -6,7 +6,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DEPS_DIR="$PROJECT_DIR/deps"
 OUTPUT_DIR="$PROJECT_DIR/output"
 VENV_DIR="$PROJECT_DIR/sequencer_venv"
-STWO_NIGHTLY="nightly-2025-07-14"
+STWO_NIGHTLY="nightly-2026-01-15"
 export CARGO_TOOLS_ROOT="${CARGO_TOOLS_ROOT:-$DEPS_DIR/compiler-tools}"
 
 usage() {

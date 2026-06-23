@@ -37,7 +37,7 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 
 ## Prerequisites
 
-- **Rust** — stable (for workspace crates) + `nightly-2025-07-14` (only for `snip36 setup` source builds of the stwo prover)
+- **Rust** — stable (for workspace crates) + `nightly-2026-01-15` (only for `snip36 setup` source builds of the stwo prover)
 - **Python 3.12** (not 3.13+) — for the `cairo-compile` venv
 - **scarb** — `2.15.2` / Cairo `2.15.0` (emits Sierra 1.7.0 for Sepolia-compatible test contracts)
 - **sncast** (Starknet Foundry) — for contract deployment and invocation
@@ -345,8 +345,8 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `main-v0.14.3` / `ac439437` — Virtual OS runner (zstd-compressed proofs)
-- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `c0b937bb` — stwo-run-and-prove binary
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `APOLLO-0.14.3-RC.12` / `9f78ee7` — Virtual OS runner (version-prefixed, zstd-compressed proofs)
+- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `3035dd00` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) @ `v2.2.0` — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
 

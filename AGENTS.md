@@ -33,7 +33,7 @@ Rust workspace split into reusable SDK crates and example apps built on top of t
 ## Key Conventions
 
 - All Rust code targets stable toolchain (workspace crates)
-- External dependencies (`stwo`, `sequencer`) require `nightly-2025-07-14`
+- External dependencies (`stwo`, `sequencer`) require `nightly-2026-01-15`
 - Config loaded from `.env` via `snip36_core::Config`
 - Structured logging via `tracing` crate
 - Error handling via `color-eyre` (CLI) and typed errors (`thiserror`) in core

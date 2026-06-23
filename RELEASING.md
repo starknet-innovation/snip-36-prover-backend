@@ -57,8 +57,8 @@ change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY`.
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
 2. Tag and push (incrementing N), or run the workflow manually:
    ```bash
-   git tag deps-v5 && git push origin deps-v5
-   # or: gh workflow run build-deps.yml -f tag=deps-v5
+   git tag deps-v7 && git push origin deps-v7
+   # or: gh workflow run build-deps.yml -f tag=deps-v7
    ```
 3. After it publishes, bump the **`deps-version` file at the repo root** to
    the new tag. That file is the single source of truth for which deps

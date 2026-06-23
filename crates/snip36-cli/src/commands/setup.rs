@@ -10,9 +10,9 @@ use tracing::{debug, error, info};
 use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
-const PROVING_UTILS_VERSION: &str = "c0b937bb19126255fbeeededbcaea4a84ae9f1c0";
-const SEQUENCER_TAG: &str = "ac43943748661c2b2d8bbb4a8314093a8ff00933";
-const STWO_NIGHTLY: &str = "nightly-2025-07-14";
+const PROVING_UTILS_VERSION: &str = "3035dd00421daa541894297bd754db6e2787807b";
+const SEQUENCER_TAG: &str = "9f78ee7cef28fc83c9c637d81475db8079a05554";
+const STWO_NIGHTLY: &str = "nightly-2026-01-15";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
 
@@ -73,7 +73,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     // [1/8] Check Rust toolchains
     info!("[1/8] Checking Rust toolchains...");
     check_rust_toolchain().await?;
-    info!("  Installing {STWO_NIGHTLY} (required by stwo 2.2.0)...");
+    info!("  Installing {STWO_NIGHTLY} (required by the pinned stwo stack)...");
     run_cmd("rustup", &["toolchain", "install", STWO_NIGHTLY]).await?;
     info!("");
 

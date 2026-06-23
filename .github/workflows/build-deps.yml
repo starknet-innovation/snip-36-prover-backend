@@ -30,9 +30,9 @@ permissions:
   contents: read
 
 env:
-  SEQUENCER_TAG: ac43943748661c2b2d8bbb4a8314093a8ff00933
-  PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
-  STWO_NIGHTLY: nightly-2025-07-14
+  SEQUENCER_TAG: 9f78ee7cef28fc83c9c637d81475db8079a05554
+  PROVING_UTILS_REV: 3035dd00421daa541894297bd754db6e2787807b
+  STWO_NIGHTLY: nightly-2026-01-15
 
 jobs:
   # Fail fast — before the ~40-minute builds — when a v* tag doesn't match the

@@ -35,9 +35,9 @@ concurrency:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: ac43943748661c2b2d8bbb4a8314093a8ff00933
-  PROVING_UTILS_REV: c0b937bb19126255fbeeededbcaea4a84ae9f1c0
-  STWO_NIGHTLY: nightly-2025-07-14
+  SEQUENCER_TAG: 9f78ee7cef28fc83c9c637d81475db8079a05554
+  PROVING_UTILS_REV: 3035dd00421daa541894297bd754db6e2787807b
+  STWO_NIGHTLY: nightly-2026-01-15
   SCARB_VERSION: 2.15.0
   STARKNET_FOUNDRY_VERSION: 0.60.0
   # The prebuilt deps release tag is read from the deps-version file at the
@@ -50,7 +50,9 @@ env:
 jobs:
   e2e-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Keep enough room for the source-build fallback when a deps-v* pin is
+    # bumped before the matching prebuilt release/cache exists.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v6
