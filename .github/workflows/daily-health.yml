@@ -69,7 +69,7 @@ jobs:
 
       - name: Cache cargo artifacts
         if: env.RUN_E2E == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -117,7 +117,7 @@ jobs:
       - name: Cache prebuilt deps
         id: deps-cache
         if: env.RUN_E2E == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             deps
