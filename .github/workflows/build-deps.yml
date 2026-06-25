@@ -41,7 +41,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       deps_tag: ${{ steps.deps-tag.outputs.deps_tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Determine tag
         id: tag
@@ -113,7 +113,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchains
         uses: dtolnay/rust-toolchain@stable
@@ -292,7 +292,7 @@ jobs:
 
     steps:
       # Needed for scripts/install.sh, attached to v* releases below.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -441,7 +441,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download artifacts
         uses: actions/download-artifact@v8

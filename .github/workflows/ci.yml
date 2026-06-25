@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Blocking: extractor/Cargo.toml cannot inherit the workspace version
       # (it is excluded from the workspace); fail fast when it drifts.
