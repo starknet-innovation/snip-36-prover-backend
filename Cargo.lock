@@ -406,9 +406,9 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.16.3"
+version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
+checksum = "4fe5f465a4f6fee88fad41b85d990f84c835335e85b5d9e6e63e0d06d28cba7c"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -1135,9 +1135,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.4"
+version = "0.18.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25470f23803092da7d239834776d653104d551bc4d7eacaf31e6837854b8e9eb"
+checksum = "9433806cd6b4ec1aba79c021c7e4c58fb4c3b9977c085062e611ac929998fb0c"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1628,9 +1628,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -2129,7 +2129,7 @@ dependencies = [
  "eyre",
  "hex",
  "indicatif",
- "rand 0.10.1",
+ "rand 0.10.2",
  "regex-lite",
  "reqwest",
  "serde",
@@ -2158,7 +2158,7 @@ dependencies = [
  "eyre",
  "hex",
  "indicatif",
- "rand 0.10.1",
+ "rand 0.10.2",
  "regex-lite",
  "reqwest",
  "serde",
@@ -2203,7 +2203,7 @@ dependencies = [
  "eyre",
  "hex",
  "indicatif",
- "rand 0.10.1",
+ "rand 0.10.2",
  "regex-lite",
  "reqwest",
  "serde",
@@ -2225,7 +2225,7 @@ dependencies = [
  "color-eyre",
  "eyre",
  "hex",
- "rand 0.10.1",
+ "rand 0.10.2",
  "reqwest",
  "serde_json",
  "snip36-core",
@@ -2259,7 +2259,7 @@ dependencies = [
  "dashmap",
  "eyre",
  "hex",
- "rand 0.10.1",
+ "rand 0.10.2",
  "regex-lite",
  "reqwest",
  "serde",
