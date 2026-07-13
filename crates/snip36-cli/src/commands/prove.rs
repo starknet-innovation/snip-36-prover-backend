@@ -213,7 +213,7 @@ async fn run_virtual_os(
     info!("  Transaction loaded successfully");
 
     let prove_endpoint;
-    let mut _runner_child: Option<tokio::process::Child> = None;
+    let mut runner_child: Option<tokio::process::Child> = None;
 
     if let Some(url) = prover_url {
         prove_endpoint = url.to_string();
@@ -273,6 +273,11 @@ async fn run_virtual_os(
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
+        // Ensure the runner is killed if we exit early (error, timeout, panic, etc.).
+        // Without this, a failed `snip36 prove virtual-os` leaves the ~15 GB process
+        // alive on port 9900, blocking all future runs.
+        cmd.kill_on_drop(true);
+
         info!("Starting the runner on port {port}...");
         let mut child = cmd.spawn().wrap_err("failed to start the runner")?;
 
@@ -307,7 +312,7 @@ async fn run_virtual_os(
         pb.finish_with_message("Server ready");
 
         prove_endpoint = ready_url;
-        _runner_child = Some(child);
+        runner_child = Some(child);
     }
 
     // Call starknet_proveTransaction
@@ -391,8 +396,10 @@ async fn run_virtual_os(
         info!("  Proof size:  {} bytes", metadata.len());
     }
 
-    // Kill the runner if we started it
-    if let Some(mut child) = _runner_child {
+    // Explicitly kill on the happy path for faster shutdown. On all other
+    // exit paths (early bail!, errors, etc.) `kill_on_drop(true)` ensures the
+    // runner is terminated when `runner_child` is dropped.
+    if let Some(mut child) = runner_child {
         let _ = child.kill().await;
     }
 
