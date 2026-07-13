@@ -65,8 +65,8 @@ the dependency artifact layout changes.
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
 2. Tag and push (incrementing N), or run the workflow manually:
    ```bash
-   git tag deps-v8 && git push origin deps-v8
-   # or: gh workflow run build-deps.yml -f tag=deps-v7
+   git tag deps-v9 && git push origin deps-v9
+   # or: gh workflow run build-deps.yml -f tag=deps-v8
    ```
 3. After it publishes, bump the **`deps-version` file at the repo root** to
    the new tag. That file is the single source of truth for which deps

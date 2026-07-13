@@ -144,7 +144,7 @@ Latest successful on-chain test runs:
 
 | Network | `snip36` version | Prover deps | Evidence |
 |---------|------------------|-------------|----------|
-| Sepolia (in progress) | main + new prover | [`deps-v8`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v8) (pending build) | Source upgraded to sequencer `09c6010` (see `SEQUENCER_TAG`). |
+| Sepolia (in progress) | main + new prover | [`deps-v9`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v9) (pending build) | Source upgraded to sequencer `09c6010` + proving-utils `0a97f45`. |
 | Sepolia | `1.2.2` (`e0315ab`) | [`deps-v7`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v7) | [Daily Sepolia Health Check, 2026-06-23](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/28044468565/job/83018873931) passed `snip36 e2e` and `snip36 e2e-messages`. |
 | Mainnet | `1.1.3` (`snip36-prover:1.1.3`) | [`deps-v3`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v3) | Manual Mainnet validation reported for `snip36-prover:1.1.3`; the [`v1.1.3` release](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.1.3) bundles dependency pins matching `deps-v3`. |
 
@@ -360,7 +360,7 @@ snip-36-prover-backend/
 ## Key Dependencies
 
 - [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ main / `09c6010` — Virtual OS transaction prover (starknet_transaction_prover)
-- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `3035dd00` — stwo-run-and-prove binary
+- [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `0a97f45` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `489a0f3e` — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
 
