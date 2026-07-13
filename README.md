@@ -358,7 +358,7 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `APOLLO-0.14.3-RC.12` / `9f78ee7` — Virtual OS transaction prover
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ main / `09c6010` — Virtual OS transaction prover (starknet_transaction_prover)
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `3035dd00` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `489a0f3e` — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
