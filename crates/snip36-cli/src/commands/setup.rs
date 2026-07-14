@@ -11,7 +11,7 @@ use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
 const PROVING_UTILS_VERSION: &str = "0a97f45a15809e7b5a821b7adc49212af7b399f1";
-const SEQUENCER_TAG: &str = "09c60101ec48f8a54babee725b371e814833d213";
+const SEQUENCER_TAG: &str = "e6b6fd2e9932909107833579e5b6efd6c75fa0af";
 const STWO_NIGHTLY: &str = "nightly-2026-01-15";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
