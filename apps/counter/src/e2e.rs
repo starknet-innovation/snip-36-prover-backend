@@ -99,7 +99,7 @@ fn encode_account_calls(calls: Vec<(String, String, Vec<String>)>) -> Vec<String
 
 #[derive(Args)]
 pub struct E2eArgs {
-    /// Remote prover URL (skip local starknet_os_runner)
+    /// Remote prover URL (skip the local transaction prover)
     #[arg(long)]
     pub prover_url: Option<String>,
 
@@ -119,7 +119,7 @@ pub struct E2eArgs {
     #[arg(long, default_value = "1")]
     pub increments_per_snos: u32,
 
-    /// Stop after proving -- save proof and proof_facts locally without submitting via RPC
+    /// Stop after proving -- save proof and proof_facts without submitting on-chain
     #[arg(long)]
     pub prove_only: bool,
 }

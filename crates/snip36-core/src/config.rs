@@ -97,11 +97,10 @@ impl Config {
 
     /// Path to the virtual-OS runner binary.
     ///
-    /// The runner is named `starknet_transaction_prover` when built from source
-    /// (the upstream cargo package for the pinned sequencer tag), but
-    /// `starknet_os_runner` when fetched as a pre-built release artifact. Return
-    /// whichever is present, falling back to the release-artifact name for the
-    /// "not found" error path.
+    /// The canonical binary is `starknet_transaction_prover`; prebuilt bundles
+    /// also include `starknet_os_runner` as a compatibility alias. Return
+    /// whichever is present, preserving the historical alias as the fallback
+    /// for the "not found" error path.
     pub fn runner_bin(&self) -> PathBuf {
         let release = self.deps_dir.join("sequencer/target/release");
         let os_runner = release.join("starknet_os_runner");

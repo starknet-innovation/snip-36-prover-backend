@@ -1,7 +1,7 @@
 /**
  * Starknet key generation, signing, and transaction hashing.
  *
- * Uses starknet.js v9 in-browser — no wallet extension needed.
+ * Uses starknet.js v10 in-browser — no wallet extension needed.
  *
  * For standard invokes (step 5), we use starknet.js's built-in hash.
  * For SNIP-36 proof-bearing txs (step 7), the backend computes the
@@ -27,11 +27,11 @@ export const SN_SEPOLIA_CHAIN_ID =
  * Resource bounds for playground transactions.
  * Must match the backend's RESOURCE_BOUNDS_FOR_RPC.
  *
- * starknet.js v9.4+ includes all 3 resource types in the hash
+ * starknet.js v10 includes all 3 resource types in the hash
  * (L1_GAS, L2_GAS, L1_DATA_GAS) per the latest Starknet spec.
  */
 /**
- * starknet.js v9.4.2 expects all resource bound values as BigInt
+ * starknet.js v10 expects all resource bound values as BigInt
  * (no auto-conversion from strings in the hash internals).
  */
 export const RESOURCE_BOUNDS = {

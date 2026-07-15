@@ -4,7 +4,7 @@ Developer tooling for proving SNIP-36 virtual block execution using the stwo-cai
 
 ## Overview
 
-[SNIP-36](https://community.starknet.io/t/snip-36-virtual-blocks/) introduces **virtual blocks** — off-chain execution of a single `INVOKE_FUNCTION` transaction against a reference Starknet block, proven via the stwo-cairo prover. The virtual OS is a stripped-down Starknet OS (Cairo 1 only, restricted syscalls, single transaction, no block preprocessing).
+[SNIP-36](https://community.starknet.io/t/snip-36-in-protocol-proof-verification/116123) introduces **virtual blocks** — off-chain execution of a single `INVOKE_FUNCTION` transaction against a reference Starknet block, proven via the stwo-cairo prover. The virtual OS is a stripped-down Starknet OS (Cairo 1 only, restricted syscalls, single transaction, no block preprocessing).
 
 ## Architecture
 
@@ -15,7 +15,7 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 │                  SNIP-36 End-to-End Pipeline                    │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  1. Deploy & Invoke (snip36 deploy / snip36 fund)               │
+│  1. Deploy & Invoke (sncast / playground / snip36 fund)         │
 │     declare → deploy → invoke → wait for inclusion              │
 │                                                                 │
 │  2. Prove (snip36 prove virtual-os)                             │
@@ -37,10 +37,10 @@ The project is a **Rust workspace** with a unified CLI (`snip36`) and web backen
 
 ## Prerequisites
 
-- **Rust** — stable (for workspace crates) + `nightly-2026-01-15` (only for `snip36 setup` source builds of the stwo prover)
+- **Rust** — stable (for workspace crates) + `nightly-2026-01-15` (only for `snip36 setup` source builds of the external proving stack)
 - **Python 3.12** (not 3.13+) — for the `cairo-compile` venv
-- **scarb** — `2.15.2` / Cairo `2.15.0` (emits Sierra 1.7.0 for Sepolia-compatible test contracts)
-- **sncast** (Starknet Foundry) — for contract deployment and invocation
+- **scarb** — `2.15.0` / Cairo `2.15.0` (the versions pinned in daily E2E)
+- **sncast** (Starknet Foundry) — `0.60.0` in daily E2E; used for contract deployment and invocation
 - **~10 GB disk** — for cloned repos + built binaries (source builds; prebuilt deps are much smaller)
 - **Starknet RPC node** — for state reads during proving
 
@@ -119,9 +119,9 @@ Optional:
   Counter/messages e2e flows use this when set and otherwise fall back to RPC;
   CoinFlip settlement/playground submission paths expect it. The standalone
   `snip36 submit` command currently submits through RPC.
-- `PROVER_URL` — remote prover JSON-RPC endpoint. If set, `snip36` skips the
-  local virtual-OS runner and sends `starknet_proveTransaction` to this URL
-  instead.
+- `PROVER_URL` — remote prover JSON-RPC endpoint used by E2E and playground
+  flows. The standalone `snip36 prove virtual-os` command takes the equivalent
+  `--prover-url` option.
 
 ### 4. Check the stack, then run the health check
 
@@ -144,12 +144,15 @@ Latest successful on-chain test runs:
 
 | Network | `snip36` version | Prover deps | Evidence |
 |---------|------------------|-------------|----------|
-| Sepolia (in progress) | main + new prover | [`deps-v9`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v9) (pending build) | Source upgraded to sequencer `09c6010` + proving-utils `0a97f45`. |
-| Sepolia | `1.2.2` (`e0315ab`) | [`deps-v7`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v7) | [Daily Sepolia Health Check, 2026-06-23](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/28044468565/job/83018873931) passed `snip36 e2e` and `snip36 e2e-messages`. |
+| Sepolia | [`v1.2.4`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.2.4) (proving path validated at [`48cec61`](https://github.com/starknet-innovation/snip-36-prover-backend/commit/48cec612bab98d405447e7d1feb338d9e58b9eae)) | [`deps-v10`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v10) | [Daily Sepolia Health Check, 2026-07-15](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29409225088) passed `snip36 e2e` and `snip36 e2e-messages`, and verified program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`. |
 | Mainnet | `1.1.3` (`snip36-prover:1.1.3`) | [`deps-v3`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v3) | Manual Mainnet validation reported for `snip36-prover:1.1.3`; the [`v1.1.3` release](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.1.3) bundles dependency pins matching `deps-v3`. |
 
 The table records successful on-chain runs, not offline release smoke tests.
-Update it after a newer release has passed the corresponding network run. The `deps-v8` build is triggered by the `deps-v8` tag (uses the updated `SEQUENCER_TAG`).
+Update it after a newer release has passed the corresponding network run.
+`v1.2.4` changed only version metadata after the cited proving-path commit and
+reused the exact `deps-v10` artifacts; its
+[release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29410619453)
+smoke-tested all three platform bundles and published the multi-arch image.
 
 The default CI schedule runs against sepolia; mainnet runs are opt-in via
 GitHub `workflow_dispatch` (pick `mainnet` from the `network` input). The CI
@@ -198,7 +201,9 @@ cargo run --release -p snip36-playground
 cd web/frontend && npm install && npm exec vite
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000. The CoinFlip UI uses the same backend and can be
+started with `cd web/coinflip && npm install && npm exec vite`; it opens on
+http://localhost:3001.
 
 ## Docker
 
@@ -359,9 +364,9 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ main / `09c6010` — Virtual OS transaction prover (starknet_transaction_prover)
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.3-RC.2` / `e6b6fd2` — Virtual OS transaction prover (`starknet_transaction_prover`); program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `0a97f45` — stwo-run-and-prove binary
-- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `489a0f3e` — Circle STARK prover
+- [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `5ea05973` (via the pinned proving-utils lockfile) — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
 
 ## License

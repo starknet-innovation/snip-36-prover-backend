@@ -35,9 +35,18 @@ npm exec vite
 
 Open http://localhost:3000
 
+The CoinFlip demo uses the same backend. Run its frontend instead (or in a
+third terminal) and open http://localhost:3001:
+
+```bash
+cd web/coinflip
+npm install
+npm exec vite
+```
+
 ## Architecture
 
-- **Frontend** (React + starknet.js v9): Key generation, tx hash computation, and signing happen entirely in-browser. The private key never leaves the client.
+- **Frontend** (React + starknet.js v10): Key generation, tx hash computation, and signing happen entirely in-browser. The private key never leaves the client.
 - **Backend** (Axum / Rust): REST + SSE API backed by `snip36-core` for signing and the shell scripts for prover orchestration. Holds a pre-funded master account for funding dev accounts.
 - **Proof streaming**: SSE (Server-Sent Events) streams prover logs in real-time.
 
@@ -55,7 +64,8 @@ Step 5 uses starknet.js's built-in `calculateInvokeTransactionHash`. Step 7 uses
 ## Prerequisites
 
 - Rust stable toolchain
-- Node.js 18+
+- Node.js `^20.19.0` or `>=22.12.0` (required by Vite 8)
 - `sncast` (from starknet-foundry)
-- The prover tooling set up via `snip36 setup`
+- The prover tooling set up via `snip36 setup --prebuilt` (or a source build
+  from `snip36 setup`)
 - A funded account on Starknet Sepolia (configure in `.env`)

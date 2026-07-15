@@ -79,7 +79,10 @@ snip36 e2e-settlement        # E2E settlement: deposit → prove → settle → 
 cargo run --release -p snip36-playground
 
 # Frontend (React):
-cd web/frontend && npm install && npm run dev
+cd web/frontend && npm install && npm exec vite
+
+# CoinFlip frontend (alternative UI, port 3001):
+cd web/coinflip && npm install && npm exec vite
 ```
 
 ## Verifying a change
@@ -119,6 +122,10 @@ which reads the pinned `deps-version`) or a source-built stack from
 `snip36 setup`, plus a funded account and RPC + gateway in `.env`. In CI it is
 **not** a per-PR gate — it runs on the daily schedule, on `workflow_dispatch`,
 and on PRs labelled `run-e2e` (see `.github/workflows/daily-health.yml`).
+Before using a prebuilt, daily E2E verifies that its release metadata matches
+the source pins and that all platform assets exist; after proving, it checks
+the virtual-OS program hash in `proof_facts` against the verifier-compatible
+expected hash.
 Changes to the proving/submission path ultimately need Tier 2, but extract the
 verifiable part into a pure function and unit-test it at Tier 1 where you can.
 
@@ -127,8 +134,9 @@ verifiable part into a pure function and unit-test it at Tier 1 where you can.
 Version is single-sourced in `[workspace.package]` (root `Cargo.toml`); members
 inherit via `version.workspace = true`. Two tag schemes, both handled by
 `.github/workflows/build-deps.yml`:
-- `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries,
-  reuses the pinned prebuilt deps from `deps-version`, **and** publishes an
+- `v<x.y.z>` — app release: publishes `snip36` + `snip36-playground` binaries
+  and the installer, reuses the pinned prebuilt deps from `deps-version`,
+  **and** publishes an
   all-in-one `snip36` CLI Docker image (CLI + proving stack, no playground) to
   `ghcr.io/.../snip-36-prover-backend:<x.y.z>` + `:latest` (see `Dockerfile`).
   Must equal the workspace version.

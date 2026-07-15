@@ -9,12 +9,24 @@ The SNIP-36 proving pipeline requires the virtual OS program as a JSON file. Thi
 ## Prerequisites
 
 - Rust (edition 2021)
-- The `deps/sequencer` dependency must be cloned and available (run `scripts/setup.sh` first)
+- The source checkout at `deps/sequencer` (run `snip36 setup`; prebuilt setup
+  installs binaries but does not clone the sequencer source)
 
-## Build
+## Recommended usage
+
+The unified CLI builds and runs the extractor, and creates the output directory:
 
 ```bash
-cargo build --release -p virtual-os-extractor
+snip36 extract --output output/virtual_os_program.json
+```
+
+## Build manually
+
+The extractor is excluded from the root workspace because its dependency only
+exists after source setup. Build it through its own manifest:
+
+```bash
+cargo build --release --manifest-path extractor/Cargo.toml
 ```
 
 ## Usage
@@ -26,7 +38,7 @@ virtual-os-extractor <output-path>
 Example:
 
 ```bash
-./target/release/virtual-os-extractor output/virtual_os_program.json
+./extractor/target/release/virtual-os-extractor output/virtual_os_program.json
 ```
 
 This writes the virtual OS program JSON to the specified path, creating parent directories if needed.

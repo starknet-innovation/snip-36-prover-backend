@@ -78,7 +78,7 @@ fn format_duration(d: std::time::Duration) -> String {
 
 #[derive(Args)]
 pub struct E2eMessagesArgs {
-    /// Remote prover URL (skip local starknet_os_runner)
+    /// Remote prover URL (skip the local transaction prover)
     #[arg(long)]
     pub prover_url: Option<String>,
 

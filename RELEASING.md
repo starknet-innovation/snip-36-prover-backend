@@ -14,8 +14,8 @@ its own `version` — keep it in step manually. The two web apps
 (`web/frontend`, `web/coinflip`) are npm packages versioned independently and
 are not part of these releases.
 
-**Rule:** the workspace version must equal the `v*` tag you release. `v1.2.0`
-⇒ `version = "1.2.0"`.
+**Rule:** the workspace version must equal the `v*` tag you release. `vX.Y.Z`
+⇒ `version = "X.Y.Z"`.
 
 Both rules are CI-enforced by `scripts/check-versions.sh`: every PR checks
 the extractor sync and dependency-pin sync (`ci.yml`), and the
@@ -26,8 +26,8 @@ the tag doesn't match.
 
 Publishes the `snip36` CLI + `snip36-playground` binaries and re-attaches the
 pinned prebuilt deps from the `deps-version` release, for all three platforms,
-plus a `SHA256SUMS` file (7 assets total). App releases do **not** rebuild the
-external prover deps.
+plus `SHA256SUMS` and `install.sh` (8 assets total). App releases do **not**
+rebuild the external prover deps.
 
 Before tagging a `v*` release, make sure `deps-version` points to an existing
 `deps-v*` release for the current `SEQUENCER_TAG`, `PROVING_UTILS_REV`, and
@@ -39,7 +39,9 @@ first, then update `deps-version` before the app release.
 3. Commit, open a PR, merge to `main` (the `CI / build & test` check must pass).
 4. Tag the merge commit and push:
    ```bash
-   git tag v1.2.0 && git push origin v1.2.0
+   VERSION=X.Y.Z
+   git tag "v$VERSION"
+   git push origin "v$VERSION"
    ```
 5. `build-deps.yml` runs and:
    - creates the GitHub release with `snip36-<platform>.tar.gz` (`snip36` +
@@ -66,8 +68,14 @@ the dependency artifact layout changes.
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).
 2. Tag and push (incrementing N), or run the workflow manually:
    ```bash
-   git tag deps-v9 && git push origin deps-v9
-   # or: gh workflow run build-deps.yml -f tag=deps-v8
+   git fetch --tags origin
+   latest_n="$(git tag --list 'deps-v*' | sed 's/^deps-v//' | sort -n | tail -1)"
+   DEPS_TAG="deps-v$((latest_n + 1))"
+   git tag "$DEPS_TAG"
+   git push origin "$DEPS_TAG"
+
+   # Alternative (build current main without pushing the tag yourself):
+   gh workflow run build-deps.yml --ref main -f "tag=$DEPS_TAG"
    ```
 3. After it publishes, bump the **`deps-version` file at the repo root** to
    the new tag. That file is the single source of truth for which deps
@@ -94,4 +102,5 @@ coordinated network verifier upgrade accepts a new virtual OS.
 - The on-chain e2e is **not** part of releasing — it's scheduled / label-gated
   (`run-e2e`); see `AGENTS.md`.
 - A failed release run leaves a dangling tag with no (or partial) release.
-  Delete the tag (`git push origin :v1.2.0`), fix the cause, and re-tag.
+  Delete both copies (`git tag -d vX.Y.Z` and
+  `git push origin :refs/tags/vX.Y.Z`), fix the cause, and re-tag.

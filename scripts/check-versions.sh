@@ -10,8 +10,8 @@
 #     and Rust source
 #   - the v* release tag, when given as $1 (tag v1.2.0 must equal "1.2.0")
 #
-# Run by ci.yml on every PR and by the build-deps.yml preflight job before
-# release builds start.
+# Run by ci.yml on every PR, by daily-health.yml before E2E provisioning, and
+# by the build-deps.yml preflight job before release builds start.
 #
 # Usage: ./scripts/check-versions.sh [TAG]
 

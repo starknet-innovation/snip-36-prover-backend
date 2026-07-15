@@ -15,7 +15,7 @@ usage() {
     echo "Run the virtual OS to produce a proof for a transaction."
     echo ""
     echo "This script sends a starknet_proveTransaction request to either a"
-    echo "remote prover (--prover-url) or a locally started starknet_os_runner."
+    echo "remote prover (--prover-url) or a locally started transaction prover."
     echo ""
     echo "Required:"
     echo "  --block-number <N>   Reference Starknet block number"
@@ -118,16 +118,15 @@ if [ -n "$PROVER_URL" ]; then
     PROVE_ENDPOINT="$PROVER_URL"
     echo "  Prover:  $PROVE_ENDPOINT (remote)"
 else
-    # Start local starknet_os_runner
+    # Start the local transaction prover.
     if [ ! -d "$DEPS_DIR/sequencer" ]; then
         echo "ERROR: deps/sequencer/ not found and no --prover-url specified."
-        echo "Either run ./scripts/setup.sh or provide --prover-url."
+        echo "Run 'snip36 setup --prebuilt' (or ./scripts/download-deps.sh), or provide --prover-url."
         exit 1
     fi
 
-    # The runner is named `starknet_transaction_prover` when built from source
-    # (the upstream package for the pinned sequencer tag) but `starknet_os_runner`
-    # when fetched as a prebuilt release artifact. Accept either.
+    # Prebuilt bundles include the canonical `starknet_transaction_prover`
+    # binary and the legacy `starknet_os_runner` alias. Accept either.
     RELEASE_DIR="$DEPS_DIR/sequencer/target/release"
     RUNNER_BIN=""
     for name in starknet_transaction_prover starknet_os_runner; do
@@ -171,7 +170,7 @@ else
         echo "  STRK token: $STRK_FEE_TOKEN"
     fi
 
-    echo "Starting starknet_os_runner on port $RUNNER_PORT..."
+    echo "Starting $(basename "$RUNNER_BIN") on port $RUNNER_PORT..."
     "$RUNNER_BIN" \
         --rpc-url "$RPC_URL" \
         --chain-id SN_SEPOLIA \
@@ -193,7 +192,7 @@ else
             break
         fi
         if ! kill -0 "$RUNNER_PID" 2>/dev/null; then
-            echo "ERROR: starknet_os_runner exited prematurely"
+            echo "ERROR: $(basename "$RUNNER_BIN") exited prematurely"
             wait "$RUNNER_PID" 2>/dev/null || true
             exit 1
         fi

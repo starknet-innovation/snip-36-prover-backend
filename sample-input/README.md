@@ -19,7 +19,10 @@ Configuration for the stwo prover. These are suitable for development/testing (l
 
 For production, increase `n_queries` to 70 and `pow_bits` to 26.
 
-**Note:** These parameters are used when invoking `stwo-run-and-prove` directly (see below). The `starknet_os_runner` (used in the E2E pipeline) has its own built-in prover parameters.
+**Note:** These parameters are used when invoking `stwo-run-and-prove` directly
+(see below). The `starknet_transaction_prover` used in the E2E pipeline has its
+own built-in prover parameters (`starknet_os_runner` remains a compatibility
+alias in prebuilt bundles).
 
 ## Bootloader Input Template (`bootloader_input_template.json`)
 
@@ -70,7 +73,7 @@ The stwo prover supports multiple output formats:
 
 | Format | Description | Used by |
 |--------|-------------|---------|
-| `binary` | `bincode(CairoProofForRustVerifier)` + bzip2 compression | `starknet_os_runner` (default) |
+| `binary` | `bincode(CairoProofForRustVerifier)` + bzip2 compression | `starknet_transaction_prover` (default) |
 | `cairo-serde` | JSON array of hex field elements | direct `stwo-run-and-prove` runs |
 | `json` | Full proof structure as JSON | debugging |
 
@@ -84,7 +87,7 @@ The virtual OS produces `proof_facts` — a JSON array of hex felt strings that 
 [
   "0x50524f4f4630",          // PROOF0 marker
   "0x5649525455414c5f534e4f53", // VIRTUAL_SNOS marker
-  "0x974341...",              // Virtual OS program hash
+  "0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1", // Virtual OS program hash
   "0x5649525455414c5f534e4f5330", // VIRTUAL_SNOS0 marker
   "0x186a64",                // Block number (hex)
   "0x7da482...",              // Block hash
