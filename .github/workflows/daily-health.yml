@@ -38,6 +38,7 @@ env:
   SEQUENCER_TAG: e6b6fd2e9932909107833579e5b6efd6c75fa0af
   PROVING_UTILS_REV: 0a97f45a15809e7b5a821b7adc49212af7b399f1
   STWO_NIGHTLY: nightly-2026-01-15
+  EXPECTED_VIRTUAL_OS_PROGRAM_HASH: '0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1'
   SCARB_VERSION: 2.15.0
   STARKNET_FOUNDRY_VERSION: 0.60.0
   # The prebuilt deps release tag is read from the deps-version file at the
@@ -59,6 +60,22 @@ jobs:
 
       - name: Check version sync
         run: ./scripts/check-versions.sh
+
+      # Validate the release metadata before consulting the dependency cache.
+      # A cache key containing the source pins does not prove that the cached
+      # prebuilt release was produced from those revisions.
+      - name: Validate pinned deps release provenance
+        if: env.RUN_E2E == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/check-deps-release.sh \
+            "$(cat deps-version)" \
+            "$SEQUENCER_TAG" \
+            "$PROVING_UTILS_REV" \
+            "$STWO_NIGHTLY" \
+            "${{ github.repository }}"
 
       - name: Install Rust toolchain
         if: env.RUN_E2E == 'true'
@@ -258,6 +275,24 @@ jobs:
           STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
           STARKNET_CHAIN_ID: ${{ inputs.network == 'mainnet' && 'SN_MAIN' || 'SN_SEPOLIA' }}
         run: ./snip36 e2e
+
+      - name: Verify virtual-OS program hash
+        if: env.RUN_E2E == 'true'
+        run: |
+          set -euo pipefail
+          facts_file="$(find output/e2e -type f -name '*.proof_facts' -print -quit)"
+          if [ -z "$facts_file" ]; then
+            echo "Counter E2E did not produce a proof_facts file" >&2
+            exit 1
+          fi
+          actual="$(jq -er '.[2]' "$facts_file")"
+          if [ "$actual" != "$EXPECTED_VIRTUAL_OS_PROGRAM_HASH" ]; then
+            echo "Unexpected virtual-OS program hash" >&2
+            echo "  expected: $EXPECTED_VIRTUAL_OS_PROGRAM_HASH" >&2
+            echo "  actual:   $actual" >&2
+            exit 1
+          fi
+          echo "Virtual-OS program hash verified: $actual"
 
       - name: Run E2E messages test
         if: env.RUN_E2E == 'true'

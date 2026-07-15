@@ -75,28 +75,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          deps_tag="${{ steps.deps-tag.outputs.deps_tag }}"
-
-          body="$(gh release view "$deps_tag" --repo "${{ github.repository }}" --json body --jq '.body // ""')"
-          for expected in "$SEQUENCER_TAG" "$PROVING_UTILS_REV" "$STWO_NIGHTLY"; do
-            if ! grep -Fq "$expected" <<<"$body"; then
-              echo "Pinned deps release $deps_tag does not mention expected pin: $expected" >&2
-              echo "Cut a new deps-v* release for the current pins, then update deps-version." >&2
-              exit 1
-            fi
-          done
-
-          assets="$(gh release view "$deps_tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')"
-          for asset in \
-            snip36-deps-linux-x86_64.tar.gz \
-            snip36-deps-linux-arm64.tar.gz \
-            snip36-deps-darwin-arm64.tar.gz \
-            SHA256SUMS; do
-            if ! grep -Fxq "$asset" <<<"$assets"; then
-              echo "Pinned deps release $deps_tag is missing asset: $asset" >&2
-              exit 1
-            fi
-          done
+          ./scripts/check-deps-release.sh \
+            "${{ steps.deps-tag.outputs.deps_tag }}" \
+            "$SEQUENCER_TAG" \
+            "$PROVING_UTILS_REV" \
+            "$STWO_NIGHTLY" \
+            "${{ github.repository }}"
 
   build:
     needs: preflight

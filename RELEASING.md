@@ -18,8 +18,9 @@ are not part of these releases.
 ⇒ `version = "1.2.0"`.
 
 Both rules are CI-enforced by `scripts/check-versions.sh`: every PR checks
-the extractor sync (`ci.yml`), and the `build-deps.yml` preflight job fails a
-`v*` release before the builds start if the tag doesn't match.
+the extractor sync and dependency-pin sync (`ci.yml`), and the
+`build-deps.yml` preflight job fails a `v*` release before the builds start if
+the tag doesn't match.
 
 ## `v<x.y.z>` — application release
 
@@ -79,7 +80,12 @@ the dependency artifact layout changes.
 
 `v*` releases verify this in preflight: the pinned `deps-v*` release must exist,
 publish all three platform tarballs plus `SHA256SUMS`, and mention the current
-dependency pins in its release notes.
+dependency pins in its release notes. Daily E2E performs the same provenance
+check before consulting its dependency cache, so a cache key made from new
+source pins cannot silently select binaries from an older release. It also
+checks the program hash emitted in `proof_facts` against
+`EXPECTED_VIRTUAL_OS_PROGRAM_HASH`; update that value deliberately when a
+coordinated network verifier upgrade accepts a new virtual OS.
 
 ## Notes
 
