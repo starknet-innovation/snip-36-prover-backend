@@ -17,7 +17,7 @@ from starknet_py.net.account.account import Account
 from starknet_py.net.client_models import Call
 from starknet_py.net.full_node_client import FullNodeClient
 from starknet_py.net.models import StarknetChainId
-from starknet_py.net.signer.stark_curve_signer import KeyPair, StarkCurveSigner
+from starknet_py.net.signer.stark_curve_signer import KeyPair
 
 OZ_CLASS_HASH = 0x05B4B537EAA2399E3AA99C4E2E0208EBD6C71BC1467938CD52C798C601E43564
 
@@ -75,18 +75,6 @@ async def main():
         return
     except Exception:
         pass  # not deployed — proceed
-
-    signer = StarkCurveSigner(
-        account_address=address,
-        key_pair=KeyPair(private_key=priv, public_key=pub),
-        chain_id=StarknetChainId.MAINNET,
-    )
-    account = Account(
-        address=address,
-        client=client,
-        signer=signer,
-        chain=StarknetChainId.MAINNET,
-    )
 
     print("sending deploy_account (v3, STRK fees)...")
     deploy_result = await Account.deploy_account_v3(
