@@ -202,6 +202,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+
+[[package]]
 name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -982,7 +988,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -1726,7 +1732,7 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -2032,7 +2038,7 @@ version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76a5c54c7310e7b8b9577c286d7e399ddd876c3e12b3ed917a8aabc4b96e9e8c"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bs58",
  "chrono",
  "hex",
@@ -2133,7 +2139,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 name = "snip36-cli"
 version = "1.2.4"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "clap",
  "color-eyre",
  "eyre",
@@ -2161,7 +2167,7 @@ name = "snip36-coinflip"
 version = "1.2.4"
 dependencies = [
  "axum",
- "base64",
+ "base64 0.23.0",
  "clap",
  "color-eyre",
  "dashmap",
@@ -2187,7 +2193,7 @@ dependencies = [
 name = "snip36-core"
 version = "1.2.4"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "dotenvy",
  "hex",
  "regex-lite",
@@ -2207,7 +2213,7 @@ name = "snip36-counter"
 version = "1.2.4"
 dependencies = [
  "axum",
- "base64",
+ "base64 0.23.0",
  "clap",
  "color-eyre",
  "eyre",
@@ -2306,7 +2312,7 @@ version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fcb6482913654fe96c16ec230e06207ae96a176a24b88b89b1c3441d371a395"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "crypto-bigint",
  "flate2",
  "foldhash 0.2.0",
