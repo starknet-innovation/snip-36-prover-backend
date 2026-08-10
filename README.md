@@ -144,34 +144,23 @@ Latest successful on-chain test runs:
 
 | Network | `snip36` version | Prover deps | Evidence |
 |---------|------------------|-------------|----------|
-| Sepolia | [`v1.2.4`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.2.4) (proving path validated at [`48cec61`](https://github.com/starknet-innovation/snip-36-prover-backend/commit/48cec612bab98d405447e7d1feb338d9e58b9eae)) | [`deps-v10`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v10) | [Daily Sepolia Health Check, 2026-07-15](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29409225088) passed `snip36 e2e` and `snip36 e2e-messages`, and verified program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`. |
-| Mainnet | [`v1.2.4`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.2.4) (validated at [`9f14d7d`](https://github.com/starknet-innovation/snip-36-prover-backend/commit/9f14d7d6b2925252489559d196465dfb972733bb)) | [`deps-v10`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v10) | [Mainnet E2E, 2026-07-15](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29412352703) verified `SN_MAIN`, passed `snip36 e2e` and `snip36 e2e-messages`, and verified program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`. |
+| Sepolia | [`v1.2.5`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.2.5) | [`deps-v10`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v10) | [Sepolia Health Check, 2026-08-10](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31389001246) passed `snip36 e2e` and `snip36 e2e-messages`, and verified program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`. |
+| Mainnet | [`v1.2.5`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.2.5) | [`deps-v10`](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v10) | [Mainnet E2E, 2026-08-10](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31389527344) verified `SN_MAIN`, passed `snip36 e2e` and `snip36 e2e-messages`, and verified program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`. |
 
 The table records successful on-chain runs, not offline release smoke tests.
 Update it after a newer release has passed the corresponding network run.
-`v1.2.4` changed only version metadata after the cited proving-path commit and
-reused the exact `deps-v10` artifacts; its
-[release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29410619453)
+Both `v1.2.5` runs above were dispatched against the `v1.2.5` tag itself, so the
+cited evidence is the released artifact rather than a nearby commit. `v1.2.5` is
+a dependency-maintenance release that reuses the exact `deps-v10` artifacts; its
+[release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31384372393)
 smoke-tested all three platform bundles and published the multi-arch image.
 
-> **`v1.2.5` is released but not yet on-chain validated**, so the rows above
-> still cite `v1.2.4`. `v1.2.5` is a dependency-maintenance release reusing the
-> same `deps-v10` artifacts, and its
-> [release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31384372393)
-> smoke-tested all three platform bundles and published the multi-arch image.
-> The blocker is funding, not code: since 2026-08-10 the shared Sepolia CI
-> account can no longer cover the maximum resource bounds `snip36` sets (it
-> caps `max_price_per_unit` at twice the live gas price, and L1 gas is
-> elevated), so the counter e2e fails at gateway submission with
-> `VALIDATE_FAILURE ... exceed balance`. Both the
-> [08:00 scheduled run](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31375574546)
-> on pre-release `main` and a
-> [dispatch on the `v1.2.5` tag](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31386185390)
-> fail identically, *after* the virtual OS runs and the proof is produced —
-> deploy, signing, and proof generation all pass. Top up the Sepolia account and
-> re-run `Daily Sepolia Health Check`; the program-hash check and the messages
-> e2e are skipped on this failure, so they need a green run before either row
-> can move to `v1.2.5`.
+If the e2e fails at gateway submission with
+`VALIDATE_FAILURE ... exceed balance`, the CI account is underfunded rather than
+the code being broken — `snip36` caps `max_price_per_unit` at twice the live gas
+price, so the *balance* must cover the maximum resource bounds even though actual
+burn per run is a small fraction of that. Top the account up well above the
+current bound, since the threshold tracks L1 gas volatility.
 
 The default CI schedule runs against sepolia; mainnet runs are opt-in via
 GitHub `workflow_dispatch` (pick `mainnet` from the `network` input). The CI
