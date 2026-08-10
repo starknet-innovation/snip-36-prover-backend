@@ -154,6 +154,25 @@ reused the exact `deps-v10` artifacts; its
 [release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/29410619453)
 smoke-tested all three platform bundles and published the multi-arch image.
 
+> **`v1.2.5` is released but not yet on-chain validated**, so the rows above
+> still cite `v1.2.4`. `v1.2.5` is a dependency-maintenance release reusing the
+> same `deps-v10` artifacts, and its
+> [release workflow](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31384372393)
+> smoke-tested all three platform bundles and published the multi-arch image.
+> The blocker is funding, not code: since 2026-08-10 the shared Sepolia CI
+> account can no longer cover the maximum resource bounds `snip36` sets (it
+> caps `max_price_per_unit` at twice the live gas price, and L1 gas is
+> elevated), so the counter e2e fails at gateway submission with
+> `VALIDATE_FAILURE ... exceed balance`. Both the
+> [08:00 scheduled run](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31375574546)
+> on pre-release `main` and a
+> [dispatch on the `v1.2.5` tag](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/31386185390)
+> fail identically, *after* the virtual OS runs and the proof is produced —
+> deploy, signing, and proof generation all pass. Top up the Sepolia account and
+> re-run `Daily Sepolia Health Check`; the program-hash check and the messages
+> e2e are skipped on this failure, so they need a green run before either row
+> can move to `v1.2.5`.
+
 The default CI schedule runs against sepolia; mainnet runs are opt-in via
 GitHub `workflow_dispatch` (pick `mainnet` from the `network` input). The CI
 reads `MAINNET_*` secret equivalents (`MAINNET_STARKNET_RPC_URL`,
