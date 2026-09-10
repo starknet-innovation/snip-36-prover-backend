@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use snip36_core::types::STRK_TOKEN;
 
-use crate::state::AppState;
+use crate::state::{canonical_session_id, AppState};
 
 use super::fund::error_response;
 
@@ -22,6 +22,8 @@ pub async fn prove_transaction(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let session_id = canonical_session_id(&session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
     let session = state.get_session(&session_id);
     let tx_hash = session
         .last_invoke_tx

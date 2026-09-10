@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use snip36_core::rpc::receipt_block_number;
-use snip36_core::types::STRK_TOKEN;
+use snip36_core::types::{canonical_felt_hex, STRK_TOKEN};
 use tracing::info;
 
 use crate::state::AppState;
@@ -30,11 +30,18 @@ pub async fn fund_account(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FundRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let account_address = canonical_felt_hex(&req.account_address).map_err(|e| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("Invalid account address: {e}"),
+        )
+    })?;
+
     let amount_wei: u128 = 10u128.pow(16); // 0.01 STRK
     let amount_low = format!("{:#x}", amount_wei);
     let amount_high = "0x0";
 
-    let calldata = format!("{} {} {}", req.account_address, amount_low, amount_high);
+    let calldata = format!("{account_address} {amount_low} {amount_high}");
 
     let _lock = state.sncast_lock.lock().await;
     let output = tokio::process::Command::new("sncast")

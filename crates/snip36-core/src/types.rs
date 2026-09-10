@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
+/// Parse a Starknet field element and return its canonical hexadecimal encoding.
+///
+/// This is intended for values that cross a trust boundary before being used as
+/// command-line arguments or persisted identifiers. Reformatting from `Felt`
+/// ensures the result contains only a `0x` prefix and hexadecimal digits, and
+/// is within the Starknet field range.
+pub fn canonical_felt_hex(value: &str) -> Result<String, String> {
+    let felt = Felt::from_hex(value).map_err(|e| format!("invalid Starknet field element: {e}"))?;
+    Ok(format!("{felt:#x}"))
+}
+
 /// Resource bounds for a single gas type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceBound {
@@ -179,5 +190,15 @@ mod tests {
         for c in [STRK_TOKEN, OZ_ACCOUNT_CLASS_HASH, BALANCE_OF_SELECTOR] {
             assert!(Felt::from_hex(c).is_ok(), "invalid felt constant: {c}");
         }
+    }
+
+    #[test]
+    fn canonical_felt_hex_reformats_and_validates_input() {
+        assert_eq!(canonical_felt_hex("0x000001").as_deref(), Ok("0x1"));
+        assert!(canonical_felt_hex("not-a-felt").is_err());
+        assert!(canonical_felt_hex(
+            "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        )
+        .is_err());
     }
 }
