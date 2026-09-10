@@ -96,7 +96,7 @@ pub fn compute_invoke_v3_tx_hash(
     sender_address: Felt,
     calldata: &[Felt],
     chain_id: Felt,
-    nonce: Felt,
+    transaction_nonce: Felt,
     tip: Felt,
     resource_bounds: &ResourceBounds,
     paymaster_data: &[Felt],
@@ -123,7 +123,7 @@ pub fn compute_invoke_v3_tx_hash(
         tip_rb_hash,
         paymaster_data_hash,
         chain_id,
-        nonce,
+        transaction_nonce,
         da_mode,
         account_deployment_data_hash,
         calldata_hash,
@@ -267,14 +267,14 @@ mod tests {
         let sender = Felt::from_hex("0x123").unwrap();
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
-        let nonce = Felt::ZERO;
+        let transaction_nonce = Felt::ZERO;
         let bounds = ResourceBounds::zero_fee();
 
         let h1 = compute_invoke_v3_tx_hash(
             sender,
             &calldata,
             chain_id,
-            nonce,
+            transaction_nonce,
             Felt::ZERO,
             &bounds,
             &[],
@@ -287,7 +287,7 @@ mod tests {
             sender,
             &calldata,
             chain_id,
-            nonce,
+            transaction_nonce,
             Felt::ZERO,
             &bounds,
             &[],
@@ -304,14 +304,14 @@ mod tests {
         let sender = Felt::from_hex("0x123").unwrap();
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
-        let nonce = Felt::ZERO;
+        let transaction_nonce = Felt::ZERO;
         let bounds = ResourceBounds::zero_fee();
 
         let h_without = compute_invoke_v3_tx_hash(
             sender,
             &calldata,
             chain_id,
-            nonce,
+            transaction_nonce,
             Felt::ZERO,
             &bounds,
             &[],
@@ -325,7 +325,7 @@ mod tests {
             sender,
             &calldata,
             chain_id,
-            nonce,
+            transaction_nonce,
             Felt::ZERO,
             &bounds,
             &[],

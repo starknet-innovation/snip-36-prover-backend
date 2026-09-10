@@ -19,13 +19,15 @@ use snip36_core::rpc::receipt_block_number;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
 };
-use snip36_core::types::{ResourceBound, ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{
+    canonical_felt_hex, ResourceBound, ResourceBounds, SubmitParams, STRK_TOKEN,
+};
 use starknet_types_core::felt::Felt;
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
-use snip36_server::AppState;
+use snip36_server::{canonical_session_id, AppState};
 
 use snip36_server::routes::fund::{error_response, parse_hex};
 use snip36_server::routes::prove_block::find_snip36_bin;
@@ -77,7 +79,9 @@ pub async fn invoke_increment(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InvokeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let session = state.get_session(&req.session_id);
+    let session_id = canonical_session_id(&req.session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
+    let session = state.get_session(&session_id);
 
     let contract_address = session
         .contract_address
@@ -147,7 +151,7 @@ pub async fn invoke_increment(
     info!(tx_hash = %tx_hash, "Invoke tx submitted");
 
     {
-        state.update_session_with(&req.session_id, |session| {
+        state.update_session_with(&session_id, |session| {
             session.last_invoke_tx = Some(tx_hash.clone());
         });
     }
@@ -158,7 +162,7 @@ pub async fn invoke_increment(
             let bn = receipt_block_number(&receipt);
             info!(block_number = ?bn, "Invoke tx confirmed");
             if let Some(block) = bn {
-                state.update_session_with(&req.session_id, |session| {
+                state.update_session_with(&session_id, |session| {
                     session.invoke_block = Some(block);
                 });
             }
@@ -237,6 +241,8 @@ pub async fn deploy_counter(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployCounterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let session_id = canonical_session_id(&req.session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
     let cwd = state.config.contracts_dir();
     let _lock = state.sncast_lock.lock().await;
 
@@ -261,12 +267,14 @@ pub async fn deploy_counter(
     let declare_combined = format!("{declare_stdout}\n{declare_stderr}");
 
     // Extract class hash (long hex string, 50+ chars)
-    let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Declare failed: {declare_combined}"),
-        )
-    })?;
+    let class_hash = extract_long_hex(&declare_combined)
+        .and_then(|value| canonical_felt_hex(&value).ok())
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Declare failed: {declare_combined}"),
+            )
+        })?;
 
     // Deploy with random salt
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
@@ -327,7 +335,7 @@ pub async fn deploy_counter(
         let _ = state.rpc.wait_for_block_after(block, 120, 2).await;
     }
 
-    state.update_session_with(&req.session_id, |session| {
+    state.update_session_with(&session_id, |session| {
         session.contract_address = Some(contract_address.clone());
         session.class_hash = Some(class_hash.clone());
         session.deploy_block = block_number;
@@ -373,7 +381,9 @@ pub async fn submit_proof(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitProofRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let session = state.get_session(&req.session_id);
+    let session_id = canonical_session_id(&req.session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
+    let session = state.get_session(&session_id);
 
     let proof_file = session
         .proof_file
@@ -527,6 +537,8 @@ pub async fn prove_block(
     AxumPath(session_id): AxumPath<String>,
     Query(params): Query<ProveBlockQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let session_id = canonical_session_id(&session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
     let session = state.get_session(&session_id);
     let contract_address = session
         .contract_address

@@ -6,10 +6,10 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use snip36_core::rpc::receipt_block_number;
-use snip36_core::types::OZ_ACCOUNT_CLASS_HASH;
+use snip36_core::types::{canonical_felt_hex, OZ_ACCOUNT_CLASS_HASH};
 use tracing::info;
 
-use crate::state::AppState;
+use crate::state::{canonical_session_id, AppState};
 
 use super::fund::{error_response, parse_hex};
 
@@ -34,6 +34,12 @@ pub async fn deploy_account(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployAccountRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let session_id = canonical_session_id(&req.session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
+    let public_key = canonical_felt_hex(&req.public_key).map_err(|e| {
+        error_response(StatusCode::BAD_REQUEST, &format!("Invalid public key: {e}"))
+    })?;
+
     let _lock = state.sncast_lock.lock().await;
     let output = tokio::process::Command::new("sncast")
         .args([
@@ -43,9 +49,9 @@ pub async fn deploy_account(
             "--class-hash",
             OZ_ACCOUNT_CLASS_HASH,
             "--constructor-calldata",
-            &req.public_key,
+            &public_key,
             "--salt",
-            &req.public_key,
+            &public_key,
             "--url",
             &state.config.rpc_url,
         ])
@@ -98,7 +104,7 @@ pub async fn deploy_account(
             "Deployed address differs from requested"
         );
     }
-    state.update_session_with(&req.session_id, |session| {
+    state.update_session_with(&session_id, |session| {
         session.account_address = Some(address.clone());
         session.account_deployed = true;
     });

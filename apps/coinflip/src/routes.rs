@@ -16,12 +16,13 @@ use snip36_core::rpc::receipt_block_number;
 use snip36_core::signing::{
     compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload, to_gateway_payload,
 };
-use snip36_core::types::{ResourceBounds, SubmitParams, STRK_TOKEN};
+use snip36_core::types::{canonical_felt_hex, ResourceBounds, SubmitParams, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 use tracing::info;
 
 use crate::state::{BetCommitment, CoinFlipAppState, CoinFlipDeployment};
 
+use snip36_server::canonical_session_id;
 use snip36_server::routes::fund::error_response;
 use snip36_server::routes::prove_block::find_snip36_bin;
 
@@ -107,12 +108,14 @@ pub async fn deploy_coinflip(
             String::from_utf8_lossy(&declare_output.stderr),
         );
 
-        let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("CoinFlip declare failed: {declare_combined}"),
-            )
-        })?;
+        let class_hash = extract_long_hex(&declare_combined)
+            .and_then(|value| canonical_felt_hex(&value).ok())
+            .ok_or_else(|| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("CoinFlip declare failed: {declare_combined}"),
+                )
+            })?;
         info!(class_hash = %class_hash, "CoinFlip declared");
 
         if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
@@ -271,6 +274,8 @@ pub async fn play_coinflip(
     Path(session_id): Path<String>,
     Query(params): Query<PlayQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let session_id = canonical_session_id(&session_id)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
     let deployment = {
         let lock = state.coinflip.read().await;
         lock.clone().ok_or_else(|| {
@@ -930,12 +935,14 @@ pub async fn deploy_bank(
             String::from_utf8_lossy(&declare_output.stderr),
         );
 
-        let class_hash = extract_long_hex(&declare_combined).ok_or_else(|| {
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("CoinFlipBank declare failed: {declare_combined}"),
-            )
-        })?;
+        let class_hash = extract_long_hex(&declare_combined)
+            .and_then(|value| canonical_felt_hex(&value).ok())
+            .ok_or_else(|| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("CoinFlipBank declare failed: {declare_combined}"),
+                )
+            })?;
         info!(class_hash = %class_hash, "CoinFlipBank declared");
 
         if let Some(tx) = parse_hex("transaction_hash", &declare_combined) {
@@ -1288,6 +1295,19 @@ async fn sncast_invoke(
     function: &str,
     calldata: &str,
 ) -> Result<InvokeResult, String> {
+    const ALLOWED_FUNCTIONS: &[&str] = &["approve", "match_deposit", "settle", "transfer"];
+
+    if !ALLOWED_FUNCTIONS.contains(&function) {
+        return Err(format!("unsupported sncast function: {function}"));
+    }
+
+    let contract_address = canonical_felt_hex(contract_address)?;
+    let calldata = calldata
+        .split_whitespace()
+        .map(canonical_felt_hex)
+        .collect::<Result<Vec<_>, _>>()?
+        .join(" ");
+
     let _lock = state.app.sncast_lock.lock().await;
     let account_name = state.app.config.sncast_account();
 
@@ -1301,11 +1321,11 @@ async fn sncast_invoke(
             "--url",
             &state.app.config.rpc_url,
             "--contract-address",
-            contract_address,
+            &contract_address,
             "--function",
             function,
             "--calldata",
-            calldata,
+            &calldata,
         ])
         .output()
         .await
