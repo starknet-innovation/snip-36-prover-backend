@@ -85,9 +85,9 @@ The virtual OS produces `proof_facts` — a JSON array of hex felt strings that 
 
 ```json
 [
-  "0x50524f4f4630",          // PROOF0 marker
+  "0x50524f4f4632",          // PROOF2 marker
   "0x5649525455414c5f534e4f53", // VIRTUAL_SNOS marker
-  "0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1", // Virtual OS program hash
+  "0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324", // Virtual OS program hash
   "0x5649525455414c5f534e4f5330", // VIRTUAL_SNOS0 marker
   "0x186a64",                // Block number (hex)
   "0x7da482...",              // Block hash
