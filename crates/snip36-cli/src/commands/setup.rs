@@ -11,7 +11,7 @@ use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
 const PROVING_UTILS_VERSION: &str = "0a97f45a15809e7b5a821b7adc49212af7b399f1";
-const SEQUENCER_TAG: &str = "e6b6fd2e9932909107833579e5b6efd6c75fa0af";
+const SEQUENCER_TAG: &str = "0ee373ac5f50d475ab0efd59edbda4a9215c12cf";
 const STWO_NIGHTLY: &str = "nightly-2026-01-15";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
@@ -602,7 +602,7 @@ async fn ensure_venv(project_dir: &Path, requirements: &Path) -> Result<std::pat
 }
 
 /// Install the sequencer's Sierra compiler sidecar into a project-local cargo
-/// tools root. Sequencer v0.14.3 resolves this path at runtime from
+/// tools root. Sequencer v0.14.4 resolves this path at runtime from
 /// CARGO_TOOLS_ROOT instead of from a compile-time OUT_DIR.
 async fn install_sierra_compiler(sequencer_dir: &Path, compiler_tools_dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(compiler_tools_dir).await?;
@@ -706,7 +706,7 @@ async fn layout_prebuilt(deps_dir: &Path) -> Result<()> {
         tokio::fs::copy(&os_runner, &tx_prover).await?;
     }
 
-    // deps-v5+ tarballs ship the v0.14.3 compiler sidecar in the versioned
+    // deps-v5+ tarballs ship the compiler sidecar in the versioned
     // CARGO_TOOLS_ROOT layout expected by the runner at runtime.
     let compiler_tools_src = bin_dir.join("compiler-tools");
     let compiler_tools_dst = deps_dir.join("compiler-tools");
