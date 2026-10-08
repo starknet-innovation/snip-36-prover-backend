@@ -372,7 +372,7 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.3-RC.2` / `e6b6fd2` — Virtual OS transaction prover (`starknet_transaction_prover`); program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.4-RC.0` / `0ee373a` — Virtual OS transaction prover (`starknet_transaction_prover`); program hash `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `0a97f45` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `5ea05973` (via the pinned proving-utils lockfile) — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing
