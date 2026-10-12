@@ -1,0 +1,814 @@
+diff --git a/stwo_cairo_prover/crates/cairo-air/src/components/verify_bitwise_xor_12.rs b/stwo_cairo_prover/crates/cairo-air/src/components/verify_bitwise_xor_12.rs
+index e6656c02..5e3c2495 100644
+--- a/stwo_cairo_prover/crates/cairo-air/src/components/verify_bitwise_xor_12.rs
++++ b/stwo_cairo_prover/crates/cairo-air/src/components/verify_bitwise_xor_12.rs
+@@ -60,6 +60,41 @@ impl FrameworkEval for Eval {
+             id: "bitwise_xor_10_2".to_owned(),
+         });
+ 
++        // Keep symbolic evaluators' expression structure stable. The concrete SIMD
++        // evaluator can factor this affine relation over its field values.
++        // Ignore diagnostic lifetime spelling; an unrecognized type uses the
++        // unchanged generic path below.
++        if core::any::type_name::<E>().split('<').next()
++            == Some("stwo_constraint_framework::prover::simd_domain::SimdDomainEvaluator")
++        {
++            use stwo_constraint_framework::Relation;
++            let base: E::EF = self.common_lookup_elements.combine(&[
++                VERIFY_BITWISE_XOR_12_RELATION_ID.into(),
++                a_low.clone(),
++                b_low.clone(),
++                c_low.clone(),
++            ]);
++            let zero: SecureField = self.common_lookup_elements.combine(&[M31(0); 4]);
++            let stride: [SecureField; 3] = core::array::from_fn(|limb| {
++                let mut values = [M31(0); 4];
++                values[limb + 1] = M31(1 << LIMB_BITS);
++                let shifted: SecureField = self.common_lookup_elements.combine(&values);
++                shifted - zero
++            });
++            for i in 0..1 << EXPAND_BITS {
++                for j in 0..1 << EXPAND_BITS {
++                    let multiplicity = eval.next_trace_mask();
++                    let offset = stride[0] * M31(i) + stride[1] * M31(j) + stride[2] * M31(i ^ j);
++                    eval.write_logup_frac(stwo::core::Fraction {
++                        numerator: -E::EF::from(multiplicity),
++                        denominator: base.clone() + offset,
++                    });
++                }
++            }
++            eval.finalize_logup_in_pairs();
++            return eval;
++        }
++
+         for i in 0..1 << EXPAND_BITS {
+             for j in 0..1 << EXPAND_BITS {
+                 let multiplicity = eval.next_trace_mask();
+diff --git a/stwo_cairo_prover/crates/prover/src/prover.rs b/stwo_cairo_prover/crates/prover/src/prover.rs
+index aa11637a..629f47e2 100644
+--- a/stwo_cairo_prover/crates/prover/src/prover.rs
++++ b/stwo_cairo_prover/crates/prover/src/prover.rs
+@@ -130,6 +130,30 @@ pub fn prove_cairo_with_precompute<'a, MC: MerkleChannel>(
+     input: ProverInput,
+     prover_params: ProverParameters,
+ ) -> Result<CairoProof<MC::H>, ProvingError>
++where
++    SimdBackend: BackendForChannel<MC>,
++{
++    let proof = prove_cairo_with_precompute_inner::<MC>(
++        base_column_pool,
++        twiddles,
++        preprocessed_trace,
++        preprocessed_tree,
++        input,
++        prover_params,
++    );
++    // The proof's temporaries are freed: return the small ones to the kernel before the next leg.
++    stwo::prover::backend::simd::column::trim_heap();
++    proof
++}
++
++fn prove_cairo_with_precompute_inner<'a, MC: MerkleChannel>(
++    base_column_pool: &BaseColumnPool<SimdBackend>,
++    twiddles: &TwiddleTree<SimdBackend>,
++    preprocessed_trace: Arc<PreProcessedTrace>,
++    preprocessed_tree: MaybeOwned<'a, CommitmentTreeProver<SimdBackend, MC>>,
++    input: ProverInput,
++    prover_params: ProverParameters,
++) -> Result<CairoProof<MC::H>, ProvingError>
+ where
+     SimdBackend: BackendForChannel<MC>,
+ {
+@@ -143,6 +167,40 @@ where
+         include_all_preprocessed_columns,
+     } = prover_params;
+ 
++    // Run Cairo.
++    let cairo_claim_generator = create_cairo_claim_generator(input, preprocessed_trace.clone());
++
++    // Base trace.
++    let write_trace = || {
++        let _span = span!(Level::INFO, "Write base trace").entered();
++        cairo_claim_generator.write_trace()
++    };
++    // An empty precomputed tree means the caller left the Cairo preprocessed tree to this leg:
++    // build it here, owned and beside the base trace, so it is freed with the leg instead of
++    // staying resident through the next one. Neither the base trace nor the tree reads the
++    // channel, so building them before the protocol setup leaves the transcript unchanged.
++    let ((trace_evals, claim, interaction_generator), preprocessed_tree) =
++        if preprocessed_tree.commitment.layers.is_empty() {
++            let (trace, tree) = rayon::join(write_trace, || {
++                let _span = span!(Level::INFO, "Compute preprocessed trace commitment").entered();
++                let polys = SimdBackend::interpolate_columns(
++                    gen_trace(preprocessed_trace.clone()),
++                    twiddles,
++                );
++                CommitmentTreeProver::<SimdBackend, MC>::new(
++                    polys,
++                    pcs_config.fri_config.log_blowup_factor,
++                    twiddles,
++                    store_polynomials_coefficients,
++                    pcs_config.lifting_log_size,
++                    base_column_pool,
++                )
++            });
++            (trace, MaybeOwned::Owned(tree))
++        } else {
++            (write_trace(), preprocessed_tree)
++        };
++
+     // Setup protocol.
+     let channel = &mut MC::C::default();
+ 
+@@ -161,13 +219,6 @@ where
+     // Add the preprocessed trace commitment that was computed earlier to the commitment scheme.
+     commitment_scheme.commit_tree(preprocessed_tree, channel);
+ 
+-    // Run Cairo.
+-    let cairo_claim_generator = create_cairo_claim_generator(input, preprocessed_trace.clone());
+-
+-    // Base trace.
+-    let span = span!(Level::INFO, "Write base trace").entered();
+-    let (trace_evals, claim, interaction_generator) = cairo_claim_generator.write_trace();
+-    span.exit();
+     claim.mix_into::<MC>(channel);
+     let span = span!(Level::INFO, "Compute base trace commitment").entered();
+     let mut tree_builder = commitment_scheme.tree_builder();
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/blake_round_sigma.rs b/stwo_cairo_prover/crates/prover/src/witness/components/blake_round_sigma.rs
+index 8643159e..77b63d33 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/blake_round_sigma.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/blake_round_sigma.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 1];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 1], usize>,
++    input_to_row: InputToRow<1>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -51,11 +51,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_18.rs b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_18.rs
+index 13048466..0f1261ad 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_18.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_18.rs
+@@ -83,11 +83,11 @@ impl ClaimGenerator {
+         let merged: HashMap<InputType, u32> = packed_inputs
+             .par_iter()
+             .flat_map(|p| p.unpack())
+-            .fold_with(HashMap::new(), |mut local, input| {
++            .fold_with(HashMap::default(), |mut local, input| {
+                 *local.entry(input).or_insert(0) += 1;
+                 local
+             })
+-            .reduce(HashMap::new, |mut a, b| {
++            .reduce(HashMap::default, |mut a, b| {
+                 for (k, v) in b {
+                     *a.entry(k).or_insert(0) += v;
+                 }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_9.rs b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_9.rs
+index 29a93b44..fbacd8e5 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_9.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_aggregator_window_bits_9.rs
+@@ -83,11 +83,11 @@ impl ClaimGenerator {
+         let merged: HashMap<InputType, u32> = packed_inputs
+             .par_iter()
+             .flat_map(|p| p.unpack())
+-            .fold_with(HashMap::new(), |mut local, input| {
++            .fold_with(HashMap::default(), |mut local, input| {
+                 *local.entry(input).or_insert(0) += 1;
+                 local
+             })
+-            .reduce(HashMap::new, |mut a, b| {
++            .reduce(HashMap::default, |mut a, b| {
+                 for (k, v) in b {
+                     *a.entry(k).or_insert(0) += v;
+                 }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_18.rs b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_18.rs
+index 75948330..fc94a182 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_18.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_18.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 1];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 1], usize>,
++    input_to_row: InputToRow<1>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -51,11 +51,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_9.rs b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_9.rs
+index d75b937e..0bdeba53 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_9.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/pedersen_points_table_window_bits_9.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 1];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 1], usize>,
++    input_to_row: InputToRow<1>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -51,11 +51,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_aggregator.rs b/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_aggregator.rs
+index 061105e9..e91440ae 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_aggregator.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_aggregator.rs
+@@ -109,11 +109,11 @@ impl ClaimGenerator {
+         let merged: HashMap<InputType, u32> = packed_inputs
+             .par_iter()
+             .flat_map(|p| p.unpack())
+-            .fold_with(HashMap::new(), |mut local, input| {
++            .fold_with(HashMap::default(), |mut local, input| {
+                 *local.entry(input).or_insert(0) += 1;
+                 local
+             })
+-            .reduce(HashMap::new, |mut a, b| {
++            .reduce(HashMap::default, |mut a, b| {
+                 for (k, v) in b {
+                     *a.entry(k).or_insert(0) += v;
+                 }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_round_keys.rs b/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_round_keys.rs
+index d154e032..d0365701 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_round_keys.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/poseidon_round_keys.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 1];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 1], usize>,
++    input_to_row: InputToRow<1>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -51,11 +51,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_3_3_3_3.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_3_3_3_3.rs
+index d03f66cb..3ac22cf4 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_3_3_3_3.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_3_3_3_3.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 5];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 5], usize>,
++    input_to_row: InputToRow<5>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -65,11 +65,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_6_6_3.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_6_6_3.rs
+index b97d587e..5c1c5eef 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_6_6_3.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_3_6_6_3.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 4];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 4], usize>,
++    input_to_row: InputToRow<4>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -62,11 +62,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_3.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_3.rs
+index 8da90e13..72a8ce14 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_3.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_3.rs
+@@ -10,7 +10,7 @@ pub type PackedInputType = [PackedM31; 2];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 2], usize>,
++    input_to_row: InputToRow<2>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -54,11 +54,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4.rs
+index 76fcbbe4..508ae7f4 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4.rs
+@@ -10,7 +10,7 @@ pub type PackedInputType = [PackedM31; 2];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 2], usize>,
++    input_to_row: InputToRow<2>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -54,11 +54,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4_4_4.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4_4_4.rs
+index 1e319df6..f405ee37 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4_4_4.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_4_4_4_4.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 4];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 4], usize>,
++    input_to_row: InputToRow<4>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -62,11 +62,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_7_2_5.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_7_2_5.rs
+index 1e463382..441fb1a4 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_7_2_5.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_7_2_5.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -59,11 +59,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_9_9.rs b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_9_9.rs
+index 77e7b972..24305506 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/range_check_9_9.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/range_check_9_9.rs
+@@ -10,7 +10,7 @@ pub type PackedInputType = [PackedM31; 2];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 8],
+-    input_to_row: HashMap<[M31; 2], usize>,
++    input_to_row: InputToRow<2>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -54,11 +54,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_4.rs b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_4.rs
+index 10c09fc1..7c9c9b5c 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_4.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_4.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -59,11 +59,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_7.rs b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_7.rs
+index 555751c6..fa98ca5f 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_7.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_7.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -59,11 +59,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_8.rs b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_8.rs
+index 5bf6e140..6cffcc65 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_8.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_8.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 2],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -59,11 +59,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_9.rs b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_9.rs
+index 43fef650..35380a27 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_9.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/verify_bitwise_xor_9.rs
+@@ -12,7 +12,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -59,11 +59,8 @@ impl ClaimGenerator {
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+             for input in packed_input.unpack() {
+-                self.mults[relation_index].increase_at(
+-                    (*self.input_to_row.get(&input).unwrap())
+-                        .try_into()
+-                        .unwrap(),
+-                );
++                self.mults[relation_index]
++                    .increase_at(self.input_to_row.row(&input).try_into().unwrap());
+             }
+         });
+     }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/components/verify_instruction.rs b/stwo_cairo_prover/crates/prover/src/witness/components/verify_instruction.rs
+index 680e3ff5..3a5bb893 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/components/verify_instruction.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/components/verify_instruction.rs
+@@ -88,11 +88,11 @@ impl ClaimGenerator {
+         let merged: HashMap<InputType, u32> = packed_inputs
+             .par_iter()
+             .flat_map(|p| p.unpack())
+-            .fold_with(HashMap::new(), |mut local, input| {
++            .fold_with(HashMap::default(), |mut local, input| {
+                 *local.entry(input).or_insert(0) += 1;
+                 local
+             })
+-            .reduce(HashMap::new, |mut a, b| {
++            .reduce(HashMap::default, |mut a, b| {
+                 for (k, v) in b {
+                     *a.entry(k).or_insert(0) += v;
+                 }
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/prelude.rs b/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
+index 6ffe0a91..20805dc8 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
+@@ -1,5 +1,4 @@
+ pub use std::array::from_fn;
+-pub use std::collections::HashMap;
+ pub use std::iter::zip;
+ pub use std::simd::Simd;
+ pub use std::sync::atomic::{AtomicU32, Ordering};
+@@ -47,4 +46,4 @@ pub use crate::witness::fast_deduction::poseidon::{
+     PackedCube252, PackedPoseidon3PartialRoundsChain, PackedPoseidonFullRoundChain,
+     PackedPoseidonRoundKeys,
+ };
+-pub use crate::witness::utils::*;
++pub use crate::witness::utils::{HashMap, InputToRow, *};
+diff --git a/stwo_cairo_prover/crates/prover/src/witness/utils.rs b/stwo_cairo_prover/crates/prover/src/witness/utils.rs
+index 496b0c30..6c7de052 100644
+--- a/stwo_cairo_prover/crates/prover/src/witness/utils.rs
++++ b/stwo_cairo_prover/crates/prover/src/witness/utils.rs
+@@ -1,4 +1,3 @@
+-use std::collections::HashMap;
+ use std::sync::atomic::{AtomicU32, Ordering};
+ 
+ use bytemuck::Zeroable;
+@@ -10,7 +9,7 @@ use stwo::core::fields::m31::M31;
+ use stwo::core::pcs::{TreeSubspan, TreeVec};
+ use stwo::core::vcs_lifted::blake2_merkle::{Blake2sM31MerkleChannel, Blake2sMerkleChannel};
+ use stwo::prover::backend::simd::conversion::Pack;
+-use stwo::prover::backend::simd::m31::{PackedBaseField, PackedM31, LOG_N_LANES, N_LANES};
++use stwo::prover::backend::simd::m31::{PackedBaseField, PackedM31, N_LANES};
+ use stwo::prover::backend::{Backend, BackendForChannel};
+ use stwo::prover::poly::circle::CircleEvaluation;
+ use stwo::prover::poly::BitReversedOrder;
+@@ -22,6 +21,127 @@ use stwo_constraint_framework::PREPROCESSED_TRACE_IDX;
+ 
+ use crate::witness::preprocessed_trace::generate_preprocessed_commitment_root;
+ 
++/// A fast, deterministic hasher for the witness' lookup maps: their keys are small arrays of
++/// field elements, and SipHash dominates both the construction of the maps and the lookups.
++/// Iteration order is never relied on (the default hasher is randomized), so the choice of
++/// hasher cannot change the trace.
++#[derive(Default, Clone, Copy)]
++pub struct FastHasher(u64);
++
++impl std::hash::Hasher for FastHasher {
++    #[inline]
++    fn finish(&self) -> u64 {
++        self.0
++    }
++
++    #[inline]
++    fn write(&mut self, bytes: &[u8]) {
++        for chunk in bytes.chunks(8) {
++            let mut word = [0u8; 8];
++            word[..chunk.len()].copy_from_slice(chunk);
++            self.write_u64(u64::from_le_bytes(word));
++        }
++    }
++
++    #[inline]
++    fn write_u32(&mut self, i: u32) {
++        self.write_u64(i as u64);
++    }
++
++    #[inline]
++    fn write_u64(&mut self, i: u64) {
++        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
++    }
++
++    #[inline]
++    fn write_usize(&mut self, i: usize) {
++        self.write_u64(i as u64);
++    }
++}
++
++pub type FastHasherBuilder = std::hash::BuildHasherDefault<FastHasher>;
++
++/// [`std::collections::HashMap`] with [`FastHasher`].
++pub type HashMap<K, V> = std::collections::HashMap<K, V, FastHasherBuilder>;
++
++/// The row of a const-size component's preprocessed table for an input tuple.
++///
++/// When the key columns are bit fields of the row index that cover all its bits (the range-check
++/// and bitwise-xor tables: column `i` holds the bits `shift_i..shift_i + width_i` of the row,
++/// which is checked over every row when the table is built), the row is the sum of the shifted
++/// key values; otherwise it is looked up in a map.
++pub struct InputToRow<const N: usize> {
++    /// `(key index, shift)` of the bit fields; empty when the map is used.
++    fields: Vec<(usize, u32)>,
++    map: HashMap<[M31; N], usize>,
++}
++
++impl<const N: usize> InputToRow<N> {
++    /// Builds the lookup for a table given as `n_rows` rows of `N` key values, `at(column, row)`.
++    pub fn new(n_rows: usize, at: impl Fn(usize, usize) -> u64) -> Self {
++        let log_size = n_rows.ilog2();
++        assert_eq!(1 << log_size, n_rows);
++        let mut fields: Vec<(usize, u32)> = Vec::new();
++        let mut covered: u64 = 0;
++        for i in 0..N {
++            // The values at the rows 1, 2, 4, ... say which bits a bit-field column would hold.
++            if at(i, 0) != 0 {
++                continue;
++            }
++            let powers: Vec<u64> = (0..log_size).map(|k| at(i, 1 << k)).collect();
++            let nonzero: Vec<usize> = (0..log_size as usize).filter(|&k| powers[k] != 0).collect();
++            let Some(&shift) = nonzero.first() else {
++                continue;
++            };
++            let width = nonzero.len();
++            if nonzero != (shift..shift + width).collect::<Vec<_>>()
++                || !(0..width).all(|j| powers[shift + j] == 1 << j)
++            {
++                continue;
++            }
++            let field_mask = ((1u64 << width) - 1) << shift;
++            if covered & field_mask != 0 {
++                continue;
++            }
++            let low_mask = (1u64 << width) - 1;
++            if !(0..n_rows).all(|r| at(i, r) == ((r as u64) >> shift) & low_mask) {
++                continue;
++            }
++            covered |= field_mask;
++            fields.push((i, shift as u32));
++        }
++        if covered == (1u64 << log_size) - 1 {
++            return Self {
++                fields,
++                map: HashMap::default(),
++            };
++        }
++        let mut map: HashMap<[M31; N], usize> =
++            HashMap::with_capacity_and_hasher(n_rows, Default::default());
++        for r in 0..n_rows {
++            let key: [M31; N] = std::array::from_fn(|i| M31::from(at(i, r) as u32));
++            map.insert(key, r);
++        }
++        Self {
++            fields: Vec::new(),
++            map,
++        }
++    }
++
++    /// The row holding `input`.
++    #[inline]
++    pub fn row(&self, input: &[M31; N]) -> usize {
++        if self.fields.is_empty() {
++            *self.map.get(input).unwrap()
++        } else {
++            self.fields
++                .iter()
++                .map(|&(i, shift)| (input[i].0 as usize) << shift)
++                .sum()
++        }
++    }
++}
++
+ pub fn pack_values<T: Pack>(values: &[T]) -> Vec<T::SimdType> {
+     values
+         .as_chunks::<N_LANES>()
+@@ -208,9 +328,7 @@ pub fn export_circuit_cairo_verifier_preprocessed_roots() {
+ pub fn make_input_to_row<const N: usize>(
+     preprocessed_trace: &PreProcessedTrace,
+     column_ids: [PreProcessedColumnId; N],
+-) -> HashMap<[M31; N], usize> {
+-    let mut result: HashMap<[M31; N], usize> = HashMap::new();
+-
++) -> InputToRow<N> {
+     let columns = column_ids
+         .iter()
+         .map(|id| preprocessed_trace.get_column(id))
+@@ -220,24 +338,9 @@ pub fn make_input_to_row<const N: usize>(
+         columns.iter().all(|c| c.log_size() == log_size),
+         "input_to_row columns of different sizes"
+     );
+-
+-    for packed_row in 0..(1 << (log_size - LOG_N_LANES)) {
+-        let packed_values = columns
+-            .iter()
+-            .map(|c| c.packed_at(packed_row).to_array())
+-            .collect_vec();
+-        for i in 0..N_LANES {
+-            let key: [M31; N] = packed_values
+-                .iter()
+-                .map(|pv| pv[i])
+-                .collect_vec()
+-                .try_into()
+-                .expect("Unexpected number of column values");
+-            result.insert(key, packed_row * N_LANES + i);
+-        }
+-    }
+-
+-    result
++    InputToRow::new(1 << log_size, |i, row| {
++        columns[i].packed_at(row / N_LANES).to_array()[row % N_LANES].0 as u64
++    })
+ }
+ 
+ #[cfg(test)]
