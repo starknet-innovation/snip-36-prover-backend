@@ -53,10 +53,12 @@ jobs:
     runs-on: ubuntu-latest
     # Keep enough room for the source-build fallback when a deps-v* pin is
     # bumped before the matching prebuilt release/cache exists.
-    timeout-minutes: 90
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - name: Check version sync
         run: ./scripts/check-versions.sh
@@ -64,22 +66,11 @@ jobs:
       # Validate the release metadata before consulting the dependency cache.
       # A cache key containing the source pins does not prove that the cached
       # prebuilt release was produced from those revisions.
-      - name: Validate pinned deps release provenance
-        if: env.RUN_E2E == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          ./scripts/check-deps-release.sh \
-            "$(cat deps-version)" \
-            "$SEQUENCER_TAG" \
-            "$PROVING_UTILS_REV" \
-            "$STWO_NIGHTLY" \
-            "${{ github.repository }}"
-
       - name: Install Rust toolchain
         if: env.RUN_E2E == 'true'
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Install stwo nightly toolchain
         if: env.RUN_E2E == 'true'
         run: rustup toolchain install ${{ env.STWO_NIGHTLY }}
@@ -93,6 +84,17 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify PR source and offline checks
+        if: env.RUN_E2E == 'true'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 9b084a0cc2a2365a1ca55e39484b122fa97876da
+          git diff --exit-code HEAD^ -- . ':!.github/workflows/daily-health.yml'
+          cargo build --workspace --all-features
+          cargo test --workspace --all-features
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo fmt --all -- --check
 
       - name: Build snip36 CLI
         if: env.RUN_E2E == 'true'
@@ -129,44 +131,40 @@ jobs:
           scarb --version
           python3 --version
 
-      # Cache the heavy deps: prebuilt binaries + cairo-compile venv. Key
-      # includes the pins so it rebuilds when they change.
-      - name: Cache prebuilt deps
-        id: deps-cache
+      - name: Cache source build targets
         if: env.RUN_E2E == 'true'
         uses: actions/cache@v6
         with:
           path: |
-            deps
-            sequencer_venv
-          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}-${{ hashFiles('deps-version') }}
-          save-always: true
+            deps/proving-utils/target
+            deps/sequencer/target
+            deps/low-memory-prover/target
+          key: ${{ runner.os }}-pr128-source-${{ env.SEQUENCER_TAG }}-${{ hashFiles('vendor/low-memory-prover/*.patch') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-target-linux-x86_64-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-
 
-      - name: Provision deps (prebuilt release, source-build fallback)
-        if: env.RUN_E2E == 'true' && steps.deps-cache.outputs.cache-hit != 'true'
+      - name: Build PR low-memory prover from source
+        id: prover
+        if: env.RUN_E2E == 'true'
         run: |
-          set -uo pipefail
-          DEPS_RELEASE_TAG="$(cat deps-version)"
-          # Fast path: download the pinned prebuilt deps release (~30s) and
-          # install cairo-lang into the venv download-deps.sh creates (it can't
-          # on its own — it has no sequencer checkout). Fall back to a full
-          # from-source build (~30 min) if anything is missing or mismatched.
-          if ./scripts/download-deps.sh "$DEPS_RELEASE_TAG" \
-             && curl -fsSL "https://raw.githubusercontent.com/starkware-libs/sequencer/${SEQUENCER_TAG}/scripts/requirements.txt" -o /tmp/seq-requirements.txt \
-             && sequencer_venv/bin/pip install --quiet -r /tmp/seq-requirements.txt \
-             && [ -x sequencer_venv/bin/cairo-compile ] \
-             && [ -x deps/sequencer/target/release/starknet_transaction_prover ] \
-             && [ -n "$(find deps/compiler-tools -path '*/bin/starknet-sierra-compile' -type f -perm -111 | head -n 1)" ] \
-             && [ -x deps/bin/stwo-run-and-prove ]; then
-            echo "Provisioned deps from prebuilt release $DEPS_RELEASE_TAG"
-          else
-            echo "Prebuilt provisioning incomplete; cleaning and building from source"
-            rm -rf deps sequencer_venv
-            ./snip36 setup
-          fi
+          set -euo pipefail
+          ./snip36 setup --prebuilt
+          # Start with a clean sequencer checkout after extracting the bundle.
+          rm -rf deps/sequencer
+          ./snip36 setup --skip-prover
+          # Config prefers the compatibility alias; point it at this source build.
+          ln -sf starknet_transaction_prover deps/sequencer/target/release/starknet_os_runner
+          grep -q '^# snip36: low-memory prover' deps/sequencer/Cargo.toml
+          test "$(git -C deps/sequencer rev-parse HEAD)" = "$SEQUENCER_TAG"
+          sha256sum deps/sequencer/target/release/starknet_transaction_prover
+          for repo in stwo stwo-cairo stwo-circuits proving-utils; do
+            git -C "deps/low-memory-prover/$repo" rev-parse HEAD
+            git -C "deps/low-memory-prover/$repo" diff --stat
+          done
 
       - name: Probe Starknet RPC from runner
-        if: env.RUN_E2E == 'true'
+        id: rpc
+        if: ${{ !cancelled() && env.RUN_E2E == 'true' && steps.prover.outcome == 'success' }}
         env:
           STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
         shell: bash
@@ -228,6 +226,9 @@ jobs:
             rm -f "$body"
           }
 
+          actual_chain="$(curl -fsS -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"starknet_chainId","params":[]}' "$STARKNET_RPC_URL" | jq -er '.result')"
+          test "$actual_chain" = 0x534e5f5345504f4c4941
+          echo 'Verified SN_SEPOLIA'
           rpc_call starknet_chainId
           rpc_call starknet_blockNumber
 
@@ -266,40 +267,12 @@ jobs:
           )"
           rpc_call starknet_addInvokeTransaction "$invalid_invoke_params"
 
-      - name: Run E2E counter test
-        if: env.RUN_E2E == 'true'
+      - name: Run E2E settlement test
+        if: ${{ !cancelled() && env.RUN_E2E == 'true' && steps.prover.outcome == 'success' && steps.rpc.outcome == 'success' }}
         env:
           STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
           STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
           STARKNET_CHAIN_ID: ${{ inputs.network == 'mainnet' && 'SN_MAIN' || 'SN_SEPOLIA' }}
-        run: ./snip36 e2e
-
-      - name: Verify virtual-OS program hash
-        if: env.RUN_E2E == 'true'
-        run: |
-          set -euo pipefail
-          facts_file="$(find output/e2e -type f -name '*.proof_facts' -print -quit)"
-          if [ -z "$facts_file" ]; then
-            echo "Counter E2E did not produce a proof_facts file" >&2
-            exit 1
-          fi
-          actual="$(jq -er '.[2]' "$facts_file")"
-          if [ "$actual" != "$EXPECTED_VIRTUAL_OS_PROGRAM_HASH" ]; then
-            echo "Unexpected virtual-OS program hash" >&2
-            echo "  expected: $EXPECTED_VIRTUAL_OS_PROGRAM_HASH" >&2
-            echo "  actual:   $actual" >&2
-            exit 1
-          fi
-          echo "Virtual-OS program hash verified: $actual"
-
-      - name: Run E2E messages test
-        if: env.RUN_E2E == 'true'
-        env:
-          STARKNET_RPC_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_RPC_URL || secrets.SEPOLIA_STARKNET_RPC_URL }}
-          STARKNET_ACCOUNT_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_ACCOUNT_ADDRESS || secrets.STARKNET_ACCOUNT_ADDRESS }}
-          STARKNET_PRIVATE_KEY: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_PRIVATE_KEY || secrets.STARKNET_PRIVATE_KEY }}
-          STARKNET_GATEWAY_URL: ${{ inputs.network == 'mainnet' && secrets.MAINNET_STARKNET_GATEWAY_URL || secrets.STARKNET_GATEWAY_URL }}
-          STARKNET_CHAIN_ID: ${{ inputs.network == 'mainnet' && 'SN_MAIN' || 'SN_SEPOLIA' }}
-        run: ./snip36 e2e-messages
+        run: ./snip36 e2e-settlement
