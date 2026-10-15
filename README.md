@@ -98,6 +98,8 @@ snip36 setup
 
 This clones the sequencer and proving-utils repos, installs the nightly Rust toolchain, builds the runner and prover binaries, and creates the Python venv for `cairo-compile`.
 
+The runner is built with the **low-memory prover** ([`vendor/low-memory-prover`](vendor/low-memory-prover/README.md)): the provably.fast memory frontier backported onto the pinned stwo stack. Proofs are byte-identical; peak memory for a privacy-pool proof drops from ~14 GB to ~2–3 GB. `snip36 setup --stock-prover` builds the unpatched prover, and `scripts/check-low-memory-prover.sh` checks the patched one on this machine (exact proof bytes, peak memory).
+
 ### 3. Configure environment
 
 ```bash

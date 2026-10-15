@@ -1,0 +1,3037 @@
+diff --git a/crates/cairo_verifier/src/verify.rs b/crates/cairo_verifier/src/verify.rs
+index 1f0d965..c1ff9ca 100644
+--- a/crates/cairo_verifier/src/verify.rs
++++ b/crates/cairo_verifier/src/verify.rs
+@@ -86,7 +86,9 @@ pub fn verify_fixed_cairo_circuit(
+     if outputs.len() != verifier_config.n_outputs {
+         return Err("The proof claim does not match the expected number of outputs.".to_string());
+     }
+-    let context = build_fixed_cairo_circuit(verifier_config, proof, public_claim, outputs);
++    let mut context = build_fixed_cairo_circuit(verifier_config, proof, public_claim, outputs);
++    // The returned context is verified, not proved.
++    context.keep_on_padding();
+ 
+     // Check the verifier circuit gates topology only in test mode.
+     #[cfg(test)]
+@@ -136,7 +138,9 @@ pub fn build_fixed_cairo_circuit(
+     let proof_vars = proof.guess(&mut context);
+     verify(&mut context, &proof_vars, config, &statement);
+ 
+-    context.finalize(false)
++    let mut context = context.finalize(false);
++    context.release_on_padding();
++    context
+ }
+ 
+ /// Builds the Cairo verifier circuit topology without needing a proof.
+diff --git a/crates/circuit_common/Cargo.toml b/crates/circuit_common/Cargo.toml
+index c8437e6..7d737c3 100644
+--- a/crates/circuit_common/Cargo.toml
++++ b/crates/circuit_common/Cargo.toml
+@@ -7,6 +7,7 @@ edition.workspace = true
+ prover = ["stwo/parallel", "stwo/prover", "stwo-constraint-framework/parallel", "stwo-constraint-framework/prover"]
+ 
+ [dependencies]
++rayon.workspace = true
+ itertools.workspace = true
+ rand_chacha.workspace = true
+ 
+diff --git a/crates/circuit_common/src/finalize.rs b/crates/circuit_common/src/finalize.rs
+index 17aac5e..6142776 100644
+--- a/crates/circuit_common/src/finalize.rs
++++ b/crates/circuit_common/src/finalize.rs
+@@ -60,12 +60,13 @@ fn pad_blake_g_gate(context: &mut Context<impl IValue>) {
+ // TODO(Ilya): Make it pub(crate).
+ pub fn finalize_context(context: &mut FinalizedContext<impl IValue>) {
+     // Padding the components to a power of two.
+-    let context = &mut context.context;
+-    pad_eq(context);
+-    pad_qm31_ops(context);
+-    pad_triple_xor(context);
+-    pad_m31_to_u32(context);
+-    pad_blake_g_gate(context);
++    let inner_context = &mut context.context;
++    pad_eq(inner_context);
++    pad_qm31_ops(inner_context);
++    pad_triple_xor(inner_context);
++    pad_m31_to_u32(inner_context);
++    pad_blake_g_gate(inner_context);
++    context.release_if_requested();
+ }
+ 
+ /// Adds random values to the qm31_ops component via trivial.
+diff --git a/crates/circuit_common/src/preprocessed.rs b/crates/circuit_common/src/preprocessed.rs
+index 76aa910..45ae2a8 100644
+--- a/crates/circuit_common/src/preprocessed.rs
++++ b/crates/circuit_common/src/preprocessed.rs
+@@ -10,6 +10,7 @@ use circuits::context::FinalizedContext;
+ use circuits::ivalue::IValue;
+ use circuits_stark_verifier::order_hash_map::OrderedHashMap;
+ use itertools::zip_eq;
++use std::borrow::Cow;
+ use std::sync::Arc;
+ #[cfg(feature = "prover")]
+ use stwo::core::fields::m31::BaseField;
+@@ -355,15 +356,167 @@ fn add_blake_g_gate_to_preprocessed_trace(
+     );
+ }
+ 
++/// The value formula of a fixed lookup-table column (see
++/// [`PreProcessedTrace::add_fixed_preprocessed_columns`]), as an explicit kind so that a generated
++/// column ([`CompactColumn::Fixed`]) compares and prints by kind rather than by function pointer.
++#[derive(Copy, Clone, Debug, PartialEq, Eq)]
++enum FixedColumnKind {
++    /// The sequence column (`0..2^n`, used by `range_check_16`).
++    Seq,
++    /// The `rhs = row >> n` column of a `bitwise_xor_{n}` table (`2^(2n)` rows).
++    XorRhs,
++    /// The `lhs = row & (2^n - 1)` column of a `bitwise_xor_{n}` table.
++    XorLhs,
++    /// The `lhs ^ rhs` column of a `bitwise_xor_{n}` table.
++    XorResult,
++}
++
++impl FixedColumnKind {
++    /// The column's value at `row`, for a table of the given log size.
++    fn at(self, log_size: u32, row: usize) -> usize {
++        // A `bitwise_xor_{n}` table has log size `2n`.
++        let n_bits = log_size / 2;
++        let lhs = row & ((1_usize << n_bits) - 1);
++        let rhs = row >> n_bits;
++        match self {
++            Self::Seq => row,
++            Self::XorRhs => rhs,
++            Self::XorLhs => lhs,
++            Self::XorResult => lhs ^ rhs,
++        }
++    }
++}
++
++/// A preprocessed column, stored in the narrowest representation that reproduces its exact
++/// `usize` values.
++///
++/// Narrowing is always checked: a value is stored at a smaller width only when it fits exactly,
++/// so the column's values, length and order are identical to the materialized `Vec<usize>` it
++/// replaces. A column containing any value above `u32::MAX` is kept `Wide`, unchanged.
++#[derive(Clone, Debug, PartialEq, Eq)]
++enum CompactColumn {
++    /// Every value fits in a `u32`.
++    Narrow(Vec<u32>),
++    /// General fallback: the column contains some value above `u32::MAX`.
++    Wide(Vec<usize>),
++    /// Every value is 0 or 1. `words` packs the rows LSB-first, 64 rows per word; `len` is the
++    /// row count (the last word's bits past `len` are zero).
++    Bits { len: usize, words: Vec<u64> },
++    /// A fixed lookup-table column, expanded from its value formula instead of being stored.
++    Fixed { log_size: u32, kind: FixedColumnKind },
++}
++
++impl CompactColumn {
++    /// Compacts a materialized column into the narrowest representation holding its exact values.
++    fn compact(column: Vec<usize>) -> Self {
++        if column.iter().all(|&value| value <= 1) {
++            // `value` is 0 or 1, so the `u64` conversion is lossless.
++            let mut words = vec![0_u64; column.len().div_ceil(64)];
++            for (row, &value) in column.iter().enumerate() {
++                words[row / 64] |= (value as u64) << (row % 64);
++            }
++            return Self::Bits { len: column.len(), words };
++        }
++        let narrow: Result<Vec<u32>, _> =
++            column.iter().map(|&value| u32::try_from(value)).collect();
++        match narrow {
++            Ok(narrow) => Self::Narrow(narrow),
++            Err(_) => Self::Wide(column),
++        }
++    }
++
++    /// The number of rows in the column.
++    fn len(&self) -> usize {
++        match self {
++            Self::Narrow(values) => values.len(),
++            Self::Wide(values) => values.len(),
++            Self::Bits { len, .. } => *len,
++            Self::Fixed { log_size, .. } => 1_usize << log_size,
++        }
++    }
++
++    /// The value at `row`, without any allocation.
++    fn at(&self, row: usize) -> usize {
++        match self {
++            Self::Narrow(values) => {
++                usize::try_from(values[row]).expect("value originally fit usize")
++            }
++            Self::Wide(values) => values[row],
++            Self::Bits { words, .. } => ((words[row / 64] >> (row % 64)) & 1) as usize,
++            Self::Fixed { log_size, kind } => kind.at(*log_size, row),
++        }
++    }
++
++    /// Materializes the column's exact values.
++    fn to_vec(&self) -> Vec<usize> {
++        match self {
++            Self::Narrow(values) => values
++                .iter()
++                .map(|&value| usize::try_from(value).expect("value originally fit usize"))
++                .collect(),
++            Self::Wide(values) => values.clone(),
++            _ => (0..self.len()).map(|row| self.at(row)).collect(),
++        }
++    }
++
++    /// Expands the column directly to a field column, with no intermediate `usize` array. Every
++    /// value goes through the same `BaseField::from(usize)` conversion as a materialized column.
++    #[cfg(feature = "prover")]
++    fn to_field_column<B: Backend>(&self) -> Col<B, BaseField> {
++        match self {
++            Self::Narrow(values) => Col::<B, BaseField>::from_iter(values.iter().map(|&value| {
++                BaseField::from(usize::try_from(value).expect("value originally fit usize"))
++            })),
++            Self::Wide(values) => {
++                Col::<B, BaseField>::from_iter(values.iter().cloned().map(BaseField::from))
++            }
++            _ => Col::<B, BaseField>::from_iter(
++                (0..self.len()).map(|row| BaseField::from(self.at(row))),
++            ),
++        }
++    }
++
++    /// Expands the column directly to packed field elements, with no intermediate `usize` array.
++    /// Like `chunks_exact(N_LANES)`, a partial trailing chunk is dropped.
++    #[cfg(feature = "prover")]
++    fn to_packed_column(&self) -> Vec<PackedM31> {
++        match self {
++            Self::Narrow(values) => values
++                .chunks_exact(N_LANES)
++                .map(|c| {
++                    PackedM31::from_array(std::array::from_fn(|i| {
++                        BaseField::from(usize::try_from(c[i]).expect("value originally fit usize"))
++                    }))
++                })
++                .collect(),
++            Self::Wide(values) => values
++                .chunks_exact(N_LANES)
++                .map(|c| PackedM31::from_array(std::array::from_fn(|i| BaseField::from(c[i]))))
++                .collect(),
++            _ => (0..self.len() / N_LANES)
++                .map(|chunk| {
++                    PackedM31::from_array(std::array::from_fn(|i| {
++                        BaseField::from(self.at(chunk * N_LANES + i))
++                    }))
++                })
++                .collect(),
++        }
++    }
++}
++
+ /// A collection of preprocessed columns, whose values are publicly acknowledged, and independent of
+ /// the proof.
+ #[derive(Clone, Debug, Default, PartialEq)]
+ pub struct PreProcessedTrace {
+-    columns: OrderedHashMap<PreProcessedColumnId, Vec<usize>>,
++    columns: OrderedHashMap<PreProcessedColumnId, CompactColumn>,
+ }
+ 
+ impl PreProcessedTrace {
+     fn push_column(&mut self, id: PreProcessedColumnId, column: Vec<usize>) {
++        self.push_compact_column(id, CompactColumn::compact(column));
++    }
++
++    fn push_compact_column(&mut self, id: PreProcessedColumnId, column: CompactColumn) {
+         assert!(
+             self.columns.insert(id.clone(), column).is_none(),
+             "Duplicate preprocessed column id: {id:?}"
+@@ -385,16 +538,21 @@ impl PreProcessedTrace {
+     ///   all ordered pairs of n-bit values (`lhs`, `rhs`) and their XOR, used by the
+     ///   `VerifyBitwiseXor` components.
+     fn add_fixed_preprocessed_columns(pp_trace: &mut PreProcessedTrace) {
++        // The fixed columns are generated from their value formulas, never materialized.
+         // Seq column of size 2^16, needed by range_check_16.
+-        pp_trace.push_column(
++        pp_trace.push_compact_column(
+             PreProcessedColumnId { id: "seq_16".to_owned() },
+-            (0..1_usize << 16).collect(),
++            CompactColumn::Fixed { log_size: 16, kind: FixedColumnKind::Seq },
+         );
+ 
+-        // Bitwise XOR columns of sizes 2^4, 2^7, 2^8, 2^9, 2^10.
+-        let bitwise_xor: Vec<Vec<usize>> = [4, 7, 8, 9, 10]
++        // Bitwise XOR columns of sizes 2^4, 2^7, 2^8, 2^9, 2^10; the three columns of each
++        // width are all ordered pairs of n-bit values (`rhs`, `lhs`) and their XOR.
++        let bitwise_xor: Vec<CompactColumn> = [4, 7, 8, 9, 10]
+             .into_iter()
+-            .flat_map(|n_bits| gen_xor_columns(n_bits).into_iter())
++            .flat_map(|n_bits| {
++                [FixedColumnKind::XorRhs, FixedColumnKind::XorLhs, FixedColumnKind::XorResult]
++                    .map(|kind| CompactColumn::Fixed { log_size: 2 * n_bits, kind })
++            })
+             .collect();
+         let xor_col_ids = [
+             "bitwise_xor_4_0",
+@@ -414,7 +572,7 @@ impl PreProcessedTrace {
+             "bitwise_xor_10_2",
+         ];
+         for (id, column) in zip_eq(xor_col_ids, bitwise_xor) {
+-            pp_trace.push_column(PreProcessedColumnId { id: id.to_owned() }, column);
++            pp_trace.push_compact_column(PreProcessedColumnId { id: id.to_owned() }, column);
+         }
+     }
+ 
+@@ -432,25 +590,92 @@ impl PreProcessedTrace {
+ 
+     #[cfg(feature = "prover")]
+     pub fn get_trace<B: Backend>(&self) -> Vec<CircleEvaluation<B, BaseField, BitReversedOrder>> {
+-        let to_evaluation = |vec: &[usize]| {
+-            let col = Col::<B, BaseField>::from_iter(vec.iter().cloned().map(BaseField::from));
++        use rayon::prelude::*;
++
++        let to_evaluation = |column: &CompactColumn| {
++            let col = column.to_field_column::<B>();
+             CircleEvaluation::new(CanonicCoset::new(col.len().ilog2()).circle_domain(), col)
+         };
+ 
+-        self.columns.values().map(|c| to_evaluation(c)).collect()
++        // The columns are converted independently; the order of the result is that of the map.
++        let columns: Vec<&CompactColumn> = self.columns.values().collect();
++        columns.into_par_iter().map(to_evaluation).collect()
+     }
+ 
+-    pub fn get_column(&self, id: &PreProcessedColumnId) -> &Vec<usize> {
+-        self.columns.get(id).unwrap_or_else(|| panic!("Missing preprocessed column {id:?}"))
++    /// The column's exact values. `Wide` columns are borrowed in place; compact and generated
++    /// columns are materialized on each call (no cache, so nothing extra is retained).
++    pub fn get_column(&self, id: &PreProcessedColumnId) -> Cow<'_, [usize]> {
++        let column =
++            self.columns.get(id).unwrap_or_else(|| panic!("Missing preprocessed column {id:?}"));
++        match column {
++            CompactColumn::Wide(values) => Cow::Borrowed(values.as_slice()),
++            _ => Cow::Owned(column.to_vec()),
++        }
+     }
+ 
+     #[cfg(feature = "prover")]
+     pub fn get_packed_column(&self, id: &PreProcessedColumnId) -> Vec<PackedM31> {
+-        let column = self.get_column(id);
+-        column
+-            .chunks_exact(N_LANES)
+-            .map(|c| PackedM31::from_array(std::array::from_fn(|i| BaseField::from(c[i]))))
+-            .collect::<Vec<_>>()
++        self.columns
++            .get(id)
++            .unwrap_or_else(|| panic!("Missing preprocessed column {id:?}"))
++            .to_packed_column()
++    }
++}
++
++/// The `index`-th column of a [`PreProcessedTrace`], as the trace values a committed column
++/// reproduces on demand instead of keeping a stripe of its extension: the same values, in the same
++/// order, as that column of [`PreProcessedTrace::get_trace`].
++#[cfg(feature = "prover")]
++pub struct PreprocessedColumnSource {
++    trace: Arc<PreProcessedTrace>,
++    index: usize,
++}
++
++#[cfg(feature = "prover")]
++impl PreprocessedColumnSource {
++    /// A source for every column of `trace`, in the order of [`PreProcessedTrace::get_trace`].
++    pub fn all(trace: &Arc<PreProcessedTrace>) -> Vec<stwo::prover::SharedTraceSource> {
++        (0..trace.n_columns())
++            .map(|index| {
++                Arc::new(Self { trace: trace.clone(), index }) as stwo::prover::SharedTraceSource
++            })
++            .collect()
++    }
++
++    fn column(&self) -> &CompactColumn {
++        self.trace.columns.get_index(self.index).expect("the column exists").1
++    }
++}
++
++#[cfg(feature = "prover")]
++impl stwo::prover::TraceSource for PreprocessedColumnSource {
++    fn log_size(&self) -> u32 {
++        self.column().len().ilog2()
++    }
++
++    fn write_values(&self, dst: &mut [BaseField]) {
++        // The same `BaseField::from(usize)` conversion as `CompactColumn::to_field_column`.
++        let column = self.column();
++        assert_eq!(dst.len(), column.len());
++        match column {
++            CompactColumn::Narrow(values) => {
++                for (value, &narrow) in dst.iter_mut().zip(values) {
++                    *value = BaseField::from(
++                        usize::try_from(narrow).expect("value originally fit usize"),
++                    );
++                }
++            }
++            CompactColumn::Wide(values) => {
++                for (value, &wide) in dst.iter_mut().zip(values) {
++                    *value = BaseField::from(wide);
++                }
++            }
++            _ => {
++                for (row, value) in dst.iter_mut().enumerate() {
++                    *value = BaseField::from(column.at(row));
++                }
++            }
++        }
+     }
+ }
+ 
+@@ -473,6 +698,8 @@ pub struct PreprocessedCircuit {
+ impl PreprocessedCircuit {
+     /// Finalizes the context, then builds the preprocessed circuit.
+     pub fn preprocess_circuit(context: &mut FinalizedContext<impl IValue>) -> Self {
++        // The circuit is read after padding here, so it is kept.
++        context.keep_on_padding();
+         finalize_context(context);
+         Self::from_finalized_circuit(context.circuit())
+     }
+@@ -502,21 +729,76 @@ impl PreprocessedCircuit {
+             output,
+         } = circuit;
+ 
+-        // Add Eq columns.
+-        add_eq_to_preprocessed_trace(eq, &mut pp_trace);
+-        // Add QM31 operations columns.
+-        let qm31_ops_trace_generator = add_qm31_ops_to_preprocessed_trace(
+-            Qm31OpsGates { add, sub, mul, pointwise_mul, permutation },
+-            *n_vars,
+-            &multiplicities,
+-            &mut pp_trace,
++        // The components' columns are built independently, each into its own trace (compacted as
++        // they are pushed), then merged in the fixed order: Eq, QM31 operations, TripleXor,
++        // M31ToU32, BlakeGGate.
++        let multiplicities = &multiplicities;
++        let (
++            (eq_trace, (qm31_ops_trace, qm31_ops_trace_generator)),
++            (triple_xor_trace, (m31_to_u32_trace, blake_g_gate_trace)),
++        ) = rayon::join(
++            || {
++                rayon::join(
++                    || {
++                        let mut trace = PreProcessedTrace::default();
++                        add_eq_to_preprocessed_trace(eq, &mut trace);
++                        trace
++                    },
++                    || {
++                        let mut trace = PreProcessedTrace::default();
++                        let generator = add_qm31_ops_to_preprocessed_trace(
++                            Qm31OpsGates { add, sub, mul, pointwise_mul, permutation },
++                            *n_vars,
++                            multiplicities,
++                            &mut trace,
++                        );
++                        (trace, generator)
++                    },
++                )
++            },
++            || {
++                rayon::join(
++                    || {
++                        let mut trace = PreProcessedTrace::default();
++                        add_triple_xor_to_preprocessed_trace(
++                            triple_xor,
++                            multiplicities,
++                            &mut trace,
++                        );
++                        trace
++                    },
++                    || {
++                        rayon::join(
++                            || {
++                                let mut trace = PreProcessedTrace::default();
++                                add_m31_to_u32_to_preprocessed_trace(
++                                    m31_to_u32,
++                                    multiplicities,
++                                    &mut trace,
++                                );
++                                trace
++                            },
++                            || {
++                                let mut trace = PreProcessedTrace::default();
++                                add_blake_g_gate_to_preprocessed_trace(
++                                    blake_g_gate,
++                                    multiplicities,
++                                    &mut trace,
++                                );
++                                trace
++                            },
++                        )
++                    },
++                )
++            },
+         );
+-        // Add TripleXor columns.
+-        add_triple_xor_to_preprocessed_trace(triple_xor, &multiplicities, &mut pp_trace);
+-        // Add M31ToU32 columns.
+-        add_m31_to_u32_to_preprocessed_trace(m31_to_u32, &multiplicities, &mut pp_trace);
+-        // Add BlakeGGate columns.
+-        add_blake_g_gate_to_preprocessed_trace(blake_g_gate, &multiplicities, &mut pp_trace);
++        for component in
++            [eq_trace, qm31_ops_trace, triple_xor_trace, m31_to_u32_trace, blake_g_gate_trace]
++        {
++            for (id, column) in component.columns {
++                pp_trace.push_compact_column(id, column);
++            }
++        }
+ 
+         PreProcessedTrace::add_fixed_preprocessed_columns(&mut pp_trace);
+         pp_trace.sort_by_size();
+@@ -533,21 +815,3 @@ impl PreprocessedCircuit {
+         }
+     }
+ }
+-
+-/// Generates three columns of size (2^n_bits)^2. The first two columns are all ordered pairs of
+-/// n-bit values, and the third column contains the bitwise XOR of each pair.
+-fn gen_xor_columns(n_bits: usize) -> [Vec<usize>; 3] {
+-    let size = 1_usize << (2 * n_bits);
+-    let mask = (1_usize << n_bits) - 1;
+-    let mut columns: [Vec<usize>; 3] = std::array::from_fn(|_| vec![0; size]);
+-    // `i` is used for bit arithmetic (lhs/rhs), not merely to index the columns.
+-    #[allow(clippy::needless_range_loop)]
+-    for i in 0..size {
+-        let lhs = i & mask;
+-        let rhs = i >> n_bits;
+-        columns[0][i] = rhs;
+-        columns[1][i] = lhs;
+-        columns[2][i] = lhs ^ rhs;
+-    }
+-    columns
+-}
+diff --git a/crates/circuit_prover/src/circuit_air/components/verify_bitwise_xor_12.rs b/crates/circuit_prover/src/circuit_air/components/verify_bitwise_xor_12.rs
+index 58cb8f5..e68d013 100644
+--- a/crates/circuit_prover/src/circuit_air/components/verify_bitwise_xor_12.rs
++++ b/crates/circuit_prover/src/circuit_air/components/verify_bitwise_xor_12.rs
+@@ -57,6 +57,41 @@ impl FrameworkEval for Eval {
+         let c_low = eval
+             .get_preprocessed_column(PreProcessedColumnId { id: "bitwise_xor_10_2".to_owned() });
+ 
++        // Keep symbolic evaluators' expression structure stable. The concrete SIMD
++        // evaluator can factor this affine relation over its field values.
++        // Ignore diagnostic lifetime spelling; an unrecognized type uses the
++        // unchanged generic path below.
++        if core::any::type_name::<E>().split('<').next()
++            == Some("stwo_constraint_framework::prover::simd_domain::SimdDomainEvaluator")
++        {
++            use stwo_constraint_framework::Relation;
++            let base: E::EF = self.common_lookup_elements.combine(&[
++                relation_id.clone(),
++                a_low.clone(),
++                b_low.clone(),
++                c_low.clone(),
++            ]);
++            let zero: SecureField = self.common_lookup_elements.combine(&[M31(0); 4]);
++            let stride: [SecureField; 3] = core::array::from_fn(|limb| {
++                let mut values = [M31(0); 4];
++                values[limb + 1] = M31(1 << LIMB_BITS);
++                let shifted: SecureField = self.common_lookup_elements.combine(&values);
++                shifted - zero
++            });
++            for i in 0..1 << EXPAND_BITS {
++                for j in 0..1 << EXPAND_BITS {
++                    let multiplicity = eval.next_trace_mask();
++                    let offset = stride[0] * M31(i) + stride[1] * M31(j) + stride[2] * M31(i ^ j);
++                    eval.write_logup_frac(stwo::core::Fraction {
++                        numerator: -E::EF::from(multiplicity),
++                        denominator: base.clone() + offset,
++                    });
++                }
++            }
++            eval.finalize_logup_in_pairs();
++            return eval;
++        }
++
+         for i in 0..1 << EXPAND_BITS {
+             for j in 0..1 << EXPAND_BITS {
+                 let multiplicity = eval.next_trace_mask();
+diff --git a/crates/circuit_prover/src/prover.rs b/crates/circuit_prover/src/prover.rs
+index e10f292..b1f4ead 100644
+--- a/crates/circuit_prover/src/prover.rs
++++ b/crates/circuit_prover/src/prover.rs
+@@ -158,11 +158,15 @@ where
+         base_column_pool,
+     );
+ 
+-    commitment_scheme.set_store_polynomials_coefficients();
+-
+     // Preprocessed trace.
+     commitment_scheme.commit_tree(preprocessed_tree, channel);
+ 
++    // A context released at padding hands its values over instead of `values` (see
++    // `FinalizedContext::release_on_padding`); they are freed once the base trace is written.
++    let released_values =
++        if values.is_empty() { circuits::ivalue::take_released_values() } else { None };
++    let values = released_values.as_deref().unwrap_or(values);
++
+     // Base trace.
+     let mut tree_builder = commitment_scheme.tree_builder();
+     let (claim, component_log_sizes, interaction_generator) = write_trace(
+@@ -175,6 +179,7 @@ where
+     );
+ 
+     claim.mix_into(channel);
++    drop(released_values);
+     tree_builder.commit(channel);
+ 
+     // Draw interaction elements.
+diff --git a/crates/circuit_prover/src/witness/components/blake_g_gate.rs b/crates/circuit_prover/src/witness/components/blake_g_gate.rs
+index a9636a3..cea91f5 100644
+--- a/crates/circuit_prover/src/witness/components/blake_g_gate.rs
++++ b/crates/circuit_prover/src/witness/components/blake_g_gate.rs
+@@ -2,11 +2,10 @@
+ #![allow(clippy::too_many_arguments)]
+ use crate::circuit_air::components::blake_g_gate::{Claim, InteractionClaim, N_TRACE_COLUMNS};
+ use crate::witness::components::prelude::*;
+-use crate::witness::components::verify_bitwise_xor_4;
+-use crate::witness::components::verify_bitwise_xor_7;
+-use crate::witness::components::verify_bitwise_xor_8;
+-use crate::witness::components::verify_bitwise_xor_9;
+-use crate::witness::components::verify_bitwise_xor_12;
++use crate::witness::components::{
++    verify_bitwise_xor_4, verify_bitwise_xor_7, verify_bitwise_xor_8, verify_bitwise_xor_9,
++    verify_bitwise_xor_12,
++};
+ 
+ pub type InputType = [UInt32; 10];
+ pub type PackedInputType = [PackedUInt32; 10];
+@@ -133,16 +132,16 @@ pub fn write_trace(
+         .get_column(&PreProcessedColumnId { id: "blake_g_gate_multiplicity".to_owned() });
+ 
+     let inputs = extract_component_inputs(
+-        input_addr_a,
+-        input_addr_b,
+-        input_addr_c,
+-        input_addr_d,
+-        input_addr_f0,
+-        input_addr_f1,
+-        output_addr_a,
+-        output_addr_b,
+-        output_addr_c,
+-        output_addr_d,
++        &input_addr_a,
++        &input_addr_b,
++        &input_addr_c,
++        &input_addr_d,
++        &input_addr_f0,
++        &input_addr_f1,
++        &output_addr_a,
++        &output_addr_b,
++        &output_addr_c,
++        &output_addr_d,
+         context_values,
+     );
+ 
+@@ -152,6 +151,7 @@ pub fn write_trace(
+     let log_size = size.ilog2();
+ 
+     let packed_inputs = pack_values(&inputs);
++    drop(inputs);
+ 
+     let preprocessed_columns = [
+         input_addr_a,
+@@ -170,40 +170,27 @@ pub fn write_trace(
+     .map(|col| Col::<SimdBackend, M31>::from_iter(col.iter().map(|&x| M31::from(x))).data)
+     .collect_vec();
+ 
+-    let (trace, lookup_data, sub_component_inputs) =
+-        write_trace_simd(packed_inputs, preprocessed_columns);
+-    for inputs in sub_component_inputs.verify_bitwise_xor_8 {
+-        verify_bitwise_xor_8_state.add_packed_inputs(&inputs, 0);
+-    }
+-    for inputs in sub_component_inputs.verify_bitwise_xor_8_b {
+-        verify_bitwise_xor_8_state.add_packed_inputs(&inputs, 1);
+-    }
+-    for inputs in sub_component_inputs.verify_bitwise_xor_12 {
+-        verify_bitwise_xor_12_state.add_packed_inputs(&inputs, 0);
+-    }
+-    for inputs in sub_component_inputs.verify_bitwise_xor_4 {
+-        verify_bitwise_xor_4_state.add_packed_inputs(&inputs, 0);
+-    }
+-    for inputs in sub_component_inputs.verify_bitwise_xor_9 {
+-        verify_bitwise_xor_9_state.add_packed_inputs(&inputs, 0);
+-    }
+-    for inputs in sub_component_inputs.verify_bitwise_xor_7 {
+-        verify_bitwise_xor_7_state.add_packed_inputs(&inputs, 0);
+-    }
++    let (trace, lookup_data) = write_trace_simd(packed_inputs, preprocessed_columns);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_0, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_1, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_2, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_3, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_4, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_5, 0);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_b_0, 1);
++    verify_bitwise_xor_8_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_8_b_1, 1);
++    verify_bitwise_xor_12_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_12_0, 0);
++    verify_bitwise_xor_12_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_12_1, 0);
++    verify_bitwise_xor_4_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_4_0, 0);
++    verify_bitwise_xor_4_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_4_1, 0);
++    verify_bitwise_xor_9_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_9_0, 0);
++    verify_bitwise_xor_9_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_9_1, 0);
++    verify_bitwise_xor_7_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_7_0, 0);
++    verify_bitwise_xor_7_state.add_packed_inputs(&lookup_data.verify_bitwise_xor_7_1, 0);
+ 
+     (trace, Claim { log_size }, InteractionClaimGenerator { log_size, lookup_data })
+ }
+ 
+-#[derive(Uninitialized, IterMut, ParIterMut)]
+-struct SubComponentInputs {
+-    verify_bitwise_xor_8: [Vec<verify_bitwise_xor_8::PackedInputType>; 6],
+-    verify_bitwise_xor_8_b: [Vec<verify_bitwise_xor_8::PackedInputType>; 2],
+-    verify_bitwise_xor_12: [Vec<verify_bitwise_xor_12::PackedInputType>; 2],
+-    verify_bitwise_xor_4: [Vec<verify_bitwise_xor_4::PackedInputType>; 2],
+-    verify_bitwise_xor_9: [Vec<verify_bitwise_xor_9::PackedInputType>; 2],
+-    verify_bitwise_xor_7: [Vec<verify_bitwise_xor_7::PackedInputType>; 2],
+-}
+-
+ #[allow(clippy::useless_conversion)]
+ #[allow(unused_variables)]
+ #[allow(clippy::double_parens)]
+@@ -211,29 +198,21 @@ struct SubComponentInputs {
+ fn write_trace_simd(
+     inputs: Vec<PackedInputType>,
+     preprocessed_columns: Vec<Vec<PackedM31>>,
+-) -> (ComponentTrace<N_TRACE_COLUMNS>, LookupData, SubComponentInputs) {
++) -> (ComponentTrace<N_TRACE_COLUMNS>, LookupData) {
+     let log_n_packed_rows = inputs.len().ilog2();
+     let log_size = log_n_packed_rows + LOG_N_LANES;
+-    let (mut trace, mut lookup_data, mut sub_component_inputs) = unsafe {
++    let (mut trace, mut lookup_data) = unsafe {
+         (
+             ComponentTrace::<N_TRACE_COLUMNS>::uninitialized(log_size),
+             LookupData::uninitialized(log_n_packed_rows),
+-            SubComponentInputs::uninitialized(log_n_packed_rows),
+         )
+     };
+ 
+-    let M31_112558620 = PackedM31::broadcast(M31::from(112558620));
+     let M31_128 = PackedM31::broadcast(M31::from(128));
+     let M31_16 = PackedM31::broadcast(M31::from(16));
+     let M31_256 = PackedM31::broadcast(M31::from(256));
+-    let M31_378353459 = PackedM31::broadcast(M31::from(378353459));
+     let M31_4096 = PackedM31::broadcast(M31::from(4096));
+-    let M31_45448144 = PackedM31::broadcast(M31::from(45448144));
+     let M31_512 = PackedM31::broadcast(M31::from(512));
+-    let M31_521092554 = PackedM31::broadcast(M31::from(521092554));
+-    let M31_62225763 = PackedM31::broadcast(M31::from(62225763));
+-    let M31_648362599 = PackedM31::broadcast(M31::from(648362599));
+-    let M31_95781001 = PackedM31::broadcast(M31::from(95781001));
+     let UInt16_12 = PackedUInt16::broadcast(UInt16::from(12));
+     let UInt16_7 = PackedUInt16::broadcast(UInt16::from(7));
+     let UInt16_8 = PackedUInt16::broadcast(UInt16::from(8));
+@@ -253,624 +232,451 @@ fn write_trace_simd(
+         blake_g_gate_multiplicity,
+     ]: [Vec<PackedM31>; 11] = preprocessed_columns.try_into().unwrap();
+ 
+-    (
+-        trace.par_iter_mut(),
+-        lookup_data.par_iter_mut(),
+-        sub_component_inputs.par_iter_mut(),
+-        inputs.into_par_iter(),
+-    )
++    (trace.par_iter_mut(), lookup_data.par_iter_mut(), inputs.into_par_iter())
+         .into_par_iter()
+         .enumerate()
+-        .for_each(
+-            |(row_index, (row, lookup_data, sub_component_inputs, blake_g_gate_input))| {
+-                let blake_g_gate_input_addr_a = blake_g_gate_input_addr_a[row_index];
+-                let blake_g_gate_input_addr_b = blake_g_gate_input_addr_b[row_index];
+-                let blake_g_gate_input_addr_c = blake_g_gate_input_addr_c[row_index];
+-                let blake_g_gate_input_addr_d = blake_g_gate_input_addr_d[row_index];
+-                let blake_g_gate_input_addr_f0 = blake_g_gate_input_addr_f0[row_index];
+-                let blake_g_gate_input_addr_f1 = blake_g_gate_input_addr_f1[row_index];
+-                let blake_g_gate_output_addr_a = blake_g_gate_output_addr_a[row_index];
+-                let blake_g_gate_output_addr_b = blake_g_gate_output_addr_b[row_index];
+-                let blake_g_gate_output_addr_c = blake_g_gate_output_addr_c[row_index];
+-                let blake_g_gate_output_addr_d = blake_g_gate_output_addr_d[row_index];
+-                let blake_g_gate_multiplicity = blake_g_gate_multiplicity[row_index];
+-                let input_a_limb_0_col0 = blake_g_gate_input[0].low().as_m31();
+-                *row[0] = input_a_limb_0_col0;
+-                let input_a_limb_1_col1 = blake_g_gate_input[0].high().as_m31();
+-                *row[1] = input_a_limb_1_col1;
+-                let input_b_limb_0_col2 = blake_g_gate_input[1].low().as_m31();
+-                *row[2] = input_b_limb_0_col2;
+-                let input_b_limb_1_col3 = blake_g_gate_input[1].high().as_m31();
+-                *row[3] = input_b_limb_1_col3;
+-                let input_c_limb_0_col4 = blake_g_gate_input[2].low().as_m31();
+-                *row[4] = input_c_limb_0_col4;
+-                let input_c_limb_1_col5 = blake_g_gate_input[2].high().as_m31();
+-                *row[5] = input_c_limb_1_col5;
+-                let input_d_limb_0_col6 = blake_g_gate_input[3].low().as_m31();
+-                *row[6] = input_d_limb_0_col6;
+-                let input_d_limb_1_col7 = blake_g_gate_input[3].high().as_m31();
+-                *row[7] = input_d_limb_1_col7;
+-                let input_f0_limb_0_col8 = blake_g_gate_input[4].low().as_m31();
+-                *row[8] = input_f0_limb_0_col8;
+-                let input_f0_limb_1_col9 = blake_g_gate_input[4].high().as_m31();
+-                *row[9] = input_f0_limb_1_col9;
+-                let input_f1_limb_0_col10 = blake_g_gate_input[5].low().as_m31();
+-                *row[10] = input_f1_limb_0_col10;
+-                let input_f1_limb_1_col11 = blake_g_gate_input[5].high().as_m31();
+-                *row[11] = input_f1_limb_1_col11;
+-                let input_a_tag_limb_0_col12 = blake_g_gate_input[6].low().as_m31();
+-                *row[12] = input_a_tag_limb_0_col12;
+-                let input_a_tag_limb_1_col13 = blake_g_gate_input[6].high().as_m31();
+-                *row[13] = input_a_tag_limb_1_col13;
+-                let input_b_tag_limb_0_col14 = blake_g_gate_input[7].low().as_m31();
+-                *row[14] = input_b_tag_limb_0_col14;
+-                let input_b_tag_limb_1_col15 = blake_g_gate_input[7].high().as_m31();
+-                *row[15] = input_b_tag_limb_1_col15;
+-                let input_c_tag_limb_0_col16 = blake_g_gate_input[8].low().as_m31();
+-                *row[16] = input_c_tag_limb_0_col16;
+-                let input_c_tag_limb_1_col17 = blake_g_gate_input[8].high().as_m31();
+-                *row[17] = input_c_tag_limb_1_col17;
+-                let input_d_tag_limb_0_col18 = blake_g_gate_input[9].low().as_m31();
+-                *row[18] = input_d_tag_limb_0_col18;
+-                let input_d_tag_limb_1_col19 = blake_g_gate_input[9].high().as_m31();
+-                *row[19] = input_d_tag_limb_1_col19;
+-
+-                // Triple Sum 32.
+-
+-                let triple_sum32_res_tmp_754f3_0 =
+-                    (((blake_g_gate_input[0]) + (blake_g_gate_input[1])) + (blake_g_gate_input[4]));
+-                let triple_sum32_res_limb_0_col20 = triple_sum32_res_tmp_754f3_0.low().as_m31();
+-                *row[20] = triple_sum32_res_limb_0_col20;
+-                let triple_sum32_res_limb_1_col21 = triple_sum32_res_tmp_754f3_0.high().as_m31();
+-                *row[21] = triple_sum32_res_limb_1_col21;
+-                let triple_sum_32_output_tmp_754f3_3 = triple_sum32_res_tmp_754f3_0;
+-
+-                // Xor Rot 32 R 16.
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_4 =
+-                    ((triple_sum_32_output_tmp_754f3_3.low()) >> (UInt16_8));
+-                let ms_8_bits_col22 = ms_8_bits_tmp_754f3_4.as_m31();
+-                *row[22] = ms_8_bits_col22;
+-                let split_16_low_part_size_8_output_tmp_754f3_5 = [
+-                    ((triple_sum32_res_limb_0_col20) - ((ms_8_bits_col22) * (M31_256))),
+-                    ms_8_bits_col22,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_6 =
+-                    ((triple_sum_32_output_tmp_754f3_3.high()) >> (UInt16_8));
+-                let ms_8_bits_col23 = ms_8_bits_tmp_754f3_6.as_m31();
+-                *row[23] = ms_8_bits_col23;
+-                let split_16_low_part_size_8_output_tmp_754f3_7 = [
+-                    ((triple_sum32_res_limb_1_col21) - ((ms_8_bits_col23) * (M31_256))),
+-                    ms_8_bits_col23,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_8 = ((blake_g_gate_input[3].low()) >> (UInt16_8));
+-                let ms_8_bits_col24 = ms_8_bits_tmp_754f3_8.as_m31();
+-                *row[24] = ms_8_bits_col24;
+-                let split_16_low_part_size_8_output_tmp_754f3_9 =
+-                    [((input_d_limb_0_col6) - ((ms_8_bits_col24) * (M31_256))), ms_8_bits_col24];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_10 = ((blake_g_gate_input[3].high()) >> (UInt16_8));
+-                let ms_8_bits_col25 = ms_8_bits_tmp_754f3_10.as_m31();
+-                *row[25] = ms_8_bits_col25;
+-                let split_16_low_part_size_8_output_tmp_754f3_11 =
+-                    [((input_d_limb_1_col7) - ((ms_8_bits_col25) * (M31_256))), ms_8_bits_col25];
+-
+-                // Bitwise Xor Num Bits 8.
+-
+-                let xor_tmp_754f3_12 =
+-                    ((PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_5[0]))
+-                        ^ (PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_9[0])));
+-                let xor_col26 = xor_tmp_754f3_12.as_m31();
+-                *row[26] = xor_col26;
+-                *sub_component_inputs.verify_bitwise_xor_8[0] = [
+-                    split_16_low_part_size_8_output_tmp_754f3_5[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_9[0],
+-                    xor_col26,
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_0 = [
+-                    M31_112558620,
+-                    split_16_low_part_size_8_output_tmp_754f3_5[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_9[0],
+-                    xor_col26,
+-                ];
+-
+-                // Bitwise Xor Num Bits 8.
+-
+-                let xor_tmp_754f3_14 = ((PackedUInt16::from_m31(ms_8_bits_col22))
+-                    ^ (PackedUInt16::from_m31(ms_8_bits_col24)));
+-                let xor_col27 = xor_tmp_754f3_14.as_m31();
+-                *row[27] = xor_col27;
+-                *sub_component_inputs.verify_bitwise_xor_8[1] =
+-                    [ms_8_bits_col22, ms_8_bits_col24, xor_col27];
+-                *lookup_data.verify_bitwise_xor_8_1 =
+-                    [M31_112558620, ms_8_bits_col22, ms_8_bits_col24, xor_col27];
+-
+-                // Bitwise Xor Num Bits 8 B.
+-
+-                let xor_tmp_754f3_16 =
+-                    ((PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_7[0]))
+-                        ^ (PackedUInt16::from_m31(
+-                            split_16_low_part_size_8_output_tmp_754f3_11[0],
+-                        )));
+-                let xor_col28 = xor_tmp_754f3_16.as_m31();
+-                *row[28] = xor_col28;
+-                *sub_component_inputs.verify_bitwise_xor_8_b[0] = [
+-                    split_16_low_part_size_8_output_tmp_754f3_7[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_11[0],
+-                    xor_col28,
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_b_0 = [
+-                    M31_521092554,
+-                    split_16_low_part_size_8_output_tmp_754f3_7[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_11[0],
+-                    xor_col28,
+-                ];
+-
+-                // Bitwise Xor Num Bits 8 B.
+-
+-                let xor_tmp_754f3_18 = ((PackedUInt16::from_m31(ms_8_bits_col23))
+-                    ^ (PackedUInt16::from_m31(ms_8_bits_col25)));
+-                let xor_col29 = xor_tmp_754f3_18.as_m31();
+-                *row[29] = xor_col29;
+-                *sub_component_inputs.verify_bitwise_xor_8_b[1] =
+-                    [ms_8_bits_col23, ms_8_bits_col25, xor_col29];
+-                *lookup_data.verify_bitwise_xor_8_b_1 =
+-                    [M31_521092554, ms_8_bits_col23, ms_8_bits_col25, xor_col29];
+-
+-                let xor_rot_16_output_tmp_754f3_20 = PackedUInt32::from_limbs([
+-                    ((xor_col28) + ((xor_col29) * (M31_256))),
+-                    ((xor_col26) + ((xor_col27) * (M31_256))),
+-                ]);
+-                let xor_rot_32_r_16_output_tmp_754f3_21 = xor_rot_16_output_tmp_754f3_20;
+-
+-                // Triple Sum 32.
+-
+-                let triple_sum32_res_tmp_754f3_22 = (((blake_g_gate_input[2])
+-                    + (xor_rot_32_r_16_output_tmp_754f3_21))
+-                    + (UInt32_0));
+-                let triple_sum32_res_limb_0_col30 = triple_sum32_res_tmp_754f3_22.low().as_m31();
+-                *row[30] = triple_sum32_res_limb_0_col30;
+-                let triple_sum32_res_limb_1_col31 = triple_sum32_res_tmp_754f3_22.high().as_m31();
+-                *row[31] = triple_sum32_res_limb_1_col31;
+-                let triple_sum_32_output_tmp_754f3_25 = triple_sum32_res_tmp_754f3_22;
+-
+-                // Xor Rot 32 R 12.
+-
+-                // Split 16 Low Part Size 12.
+-
+-                let ms_4_bits_tmp_754f3_26 = ((blake_g_gate_input[1].low()) >> (UInt16_12));
+-                let ms_4_bits_col32 = ms_4_bits_tmp_754f3_26.as_m31();
+-                *row[32] = ms_4_bits_col32;
+-                let split_16_low_part_size_12_output_tmp_754f3_27 =
+-                    [((input_b_limb_0_col2) - ((ms_4_bits_col32) * (M31_4096))), ms_4_bits_col32];
+-
+-                // Split 16 Low Part Size 12.
+-
+-                let ms_4_bits_tmp_754f3_28 = ((blake_g_gate_input[1].high()) >> (UInt16_12));
+-                let ms_4_bits_col33 = ms_4_bits_tmp_754f3_28.as_m31();
+-                *row[33] = ms_4_bits_col33;
+-                let split_16_low_part_size_12_output_tmp_754f3_29 =
+-                    [((input_b_limb_1_col3) - ((ms_4_bits_col33) * (M31_4096))), ms_4_bits_col33];
+-
+-                // Split 16 Low Part Size 12.
+-
+-                let ms_4_bits_tmp_754f3_30 =
+-                    ((triple_sum_32_output_tmp_754f3_25.low()) >> (UInt16_12));
+-                let ms_4_bits_col34 = ms_4_bits_tmp_754f3_30.as_m31();
+-                *row[34] = ms_4_bits_col34;
+-                let split_16_low_part_size_12_output_tmp_754f3_31 = [
+-                    ((triple_sum32_res_limb_0_col30) - ((ms_4_bits_col34) * (M31_4096))),
+-                    ms_4_bits_col34,
+-                ];
+-
+-                // Split 16 Low Part Size 12.
+-
+-                let ms_4_bits_tmp_754f3_32 =
+-                    ((triple_sum_32_output_tmp_754f3_25.high()) >> (UInt16_12));
+-                let ms_4_bits_col35 = ms_4_bits_tmp_754f3_32.as_m31();
+-                *row[35] = ms_4_bits_col35;
+-                let split_16_low_part_size_12_output_tmp_754f3_33 = [
+-                    ((triple_sum32_res_limb_1_col31) - ((ms_4_bits_col35) * (M31_4096))),
+-                    ms_4_bits_col35,
+-                ];
+-
+-                // Bitwise Xor Num Bits 12.
+-
+-                let xor_tmp_754f3_34 =
+-                    ((PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_27[0]))
+-                        ^ (PackedUInt16::from_m31(
+-                            split_16_low_part_size_12_output_tmp_754f3_31[0],
+-                        )));
+-                let xor_col36 = xor_tmp_754f3_34.as_m31();
+-                *row[36] = xor_col36;
+-                *sub_component_inputs.verify_bitwise_xor_12[0] = [
+-                    split_16_low_part_size_12_output_tmp_754f3_27[0],
+-                    split_16_low_part_size_12_output_tmp_754f3_31[0],
+-                    xor_col36,
+-                ];
+-                *lookup_data.verify_bitwise_xor_12_0 = [
+-                    M31_648362599,
+-                    split_16_low_part_size_12_output_tmp_754f3_27[0],
+-                    split_16_low_part_size_12_output_tmp_754f3_31[0],
+-                    xor_col36,
+-                ];
+-
+-                // Bitwise Xor Num Bits 4.
+-
+-                let xor_tmp_754f3_36 = ((PackedUInt16::from_m31(ms_4_bits_col32))
+-                    ^ (PackedUInt16::from_m31(ms_4_bits_col34)));
+-                let xor_col37 = xor_tmp_754f3_36.as_m31();
+-                *row[37] = xor_col37;
+-                *sub_component_inputs.verify_bitwise_xor_4[0] =
+-                    [ms_4_bits_col32, ms_4_bits_col34, xor_col37];
+-                *lookup_data.verify_bitwise_xor_4_0 =
+-                    [M31_45448144, ms_4_bits_col32, ms_4_bits_col34, xor_col37];
+-
+-                // Bitwise Xor Num Bits 12.
+-
+-                let xor_tmp_754f3_38 =
+-                    ((PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_29[0]))
+-                        ^ (PackedUInt16::from_m31(
+-                            split_16_low_part_size_12_output_tmp_754f3_33[0],
+-                        )));
+-                let xor_col38 = xor_tmp_754f3_38.as_m31();
+-                *row[38] = xor_col38;
+-                *sub_component_inputs.verify_bitwise_xor_12[1] = [
+-                    split_16_low_part_size_12_output_tmp_754f3_29[0],
+-                    split_16_low_part_size_12_output_tmp_754f3_33[0],
+-                    xor_col38,
+-                ];
+-                *lookup_data.verify_bitwise_xor_12_1 = [
+-                    M31_648362599,
+-                    split_16_low_part_size_12_output_tmp_754f3_29[0],
+-                    split_16_low_part_size_12_output_tmp_754f3_33[0],
+-                    xor_col38,
+-                ];
+-
+-                // Bitwise Xor Num Bits 4.
+-
+-                let xor_tmp_754f3_40 = ((PackedUInt16::from_m31(ms_4_bits_col33))
+-                    ^ (PackedUInt16::from_m31(ms_4_bits_col35)));
+-                let xor_col39 = xor_tmp_754f3_40.as_m31();
+-                *row[39] = xor_col39;
+-                *sub_component_inputs.verify_bitwise_xor_4[1] =
+-                    [ms_4_bits_col33, ms_4_bits_col35, xor_col39];
+-                *lookup_data.verify_bitwise_xor_4_1 =
+-                    [M31_45448144, ms_4_bits_col33, ms_4_bits_col35, xor_col39];
+-
+-                let xor_rot_12_output_tmp_754f3_42 = PackedUInt32::from_limbs([
+-                    ((xor_col37) + ((xor_col38) * (M31_16))),
+-                    ((xor_col39) + ((xor_col36) * (M31_16))),
+-                ]);
+-                let xor_rot_32_r_12_output_tmp_754f3_43 = xor_rot_12_output_tmp_754f3_42;
+-
+-                // Verify Xor Rot 32 R 8.
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_46 = ((blake_g_gate_input[6].low()) >> (UInt16_8));
+-                let ms_8_bits_col40 = ms_8_bits_tmp_754f3_46.as_m31();
+-                *row[40] = ms_8_bits_col40;
+-                let split_16_low_part_size_8_output_tmp_754f3_47 = [
+-                    ((input_a_tag_limb_0_col12) - ((ms_8_bits_col40) * (M31_256))),
+-                    ms_8_bits_col40,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_48 = ((blake_g_gate_input[6].high()) >> (UInt16_8));
+-                let ms_8_bits_col41 = ms_8_bits_tmp_754f3_48.as_m31();
+-                *row[41] = ms_8_bits_col41;
+-                let split_16_low_part_size_8_output_tmp_754f3_49 = [
+-                    ((input_a_tag_limb_1_col13) - ((ms_8_bits_col41) * (M31_256))),
+-                    ms_8_bits_col41,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_50 =
+-                    ((xor_rot_32_r_16_output_tmp_754f3_21.low()) >> (UInt16_8));
+-                let ms_8_bits_col42 = ms_8_bits_tmp_754f3_50.as_m31();
+-                *row[42] = ms_8_bits_col42;
+-                let split_16_low_part_size_8_output_tmp_754f3_51 = [
+-                    ((xor_rot_16_output_tmp_754f3_20.low().as_m31())
+-                        - ((ms_8_bits_col42) * (M31_256))),
+-                    ms_8_bits_col42,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_52 =
+-                    ((xor_rot_32_r_16_output_tmp_754f3_21.high()) >> (UInt16_8));
+-                let ms_8_bits_col43 = ms_8_bits_tmp_754f3_52.as_m31();
+-                *row[43] = ms_8_bits_col43;
+-                let split_16_low_part_size_8_output_tmp_754f3_53 = [
+-                    ((xor_rot_16_output_tmp_754f3_20.high().as_m31())
+-                        - ((ms_8_bits_col43) * (M31_256))),
+-                    ms_8_bits_col43,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_54 = ((blake_g_gate_input[9].low()) >> (UInt16_8));
+-                let ms_8_bits_col44 = ms_8_bits_tmp_754f3_54.as_m31();
+-                *row[44] = ms_8_bits_col44;
+-                let split_16_low_part_size_8_output_tmp_754f3_55 = [
+-                    ((input_d_tag_limb_0_col18) - ((ms_8_bits_col44) * (M31_256))),
+-                    ms_8_bits_col44,
+-                ];
+-
+-                // Split 16 Low Part Size 8.
+-
+-                let ms_8_bits_tmp_754f3_56 = ((blake_g_gate_input[9].high()) >> (UInt16_8));
+-                let ms_8_bits_col45 = ms_8_bits_tmp_754f3_56.as_m31();
+-                *row[45] = ms_8_bits_col45;
+-                let split_16_low_part_size_8_output_tmp_754f3_57 = [
+-                    ((input_d_tag_limb_1_col19) - ((ms_8_bits_col45) * (M31_256))),
+-                    ms_8_bits_col45,
+-                ];
+-
+-                *sub_component_inputs.verify_bitwise_xor_8[2] = [
+-                    ms_8_bits_col40,
+-                    ms_8_bits_col42,
+-                    split_16_low_part_size_8_output_tmp_754f3_55[0],
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_2 = [
+-                    M31_112558620,
+-                    ms_8_bits_col40,
+-                    ms_8_bits_col42,
+-                    split_16_low_part_size_8_output_tmp_754f3_55[0],
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_8[3] = [
+-                    split_16_low_part_size_8_output_tmp_754f3_49[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_53[0],
+-                    ms_8_bits_col44,
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_3 = [
+-                    M31_112558620,
+-                    split_16_low_part_size_8_output_tmp_754f3_49[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_53[0],
+-                    ms_8_bits_col44,
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_8[4] = [
+-                    ms_8_bits_col41,
+-                    ms_8_bits_col43,
+-                    split_16_low_part_size_8_output_tmp_754f3_57[0],
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_4 = [
+-                    M31_112558620,
+-                    ms_8_bits_col41,
+-                    ms_8_bits_col43,
+-                    split_16_low_part_size_8_output_tmp_754f3_57[0],
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_8[5] = [
+-                    split_16_low_part_size_8_output_tmp_754f3_47[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_51[0],
+-                    ms_8_bits_col45,
+-                ];
+-                *lookup_data.verify_bitwise_xor_8_5 = [
+-                    M31_112558620,
+-                    split_16_low_part_size_8_output_tmp_754f3_47[0],
+-                    split_16_low_part_size_8_output_tmp_754f3_51[0],
+-                    ms_8_bits_col45,
+-                ];
+-
+-                // Verify Xor Rot 32 R 7.
+-
+-                // Split 16 Low Part Size 7.
+-
+-                let ms_9_bits_tmp_754f3_60 =
+-                    ((xor_rot_32_r_12_output_tmp_754f3_43.low()) >> (UInt16_7));
+-                let ms_9_bits_col46 = ms_9_bits_tmp_754f3_60.as_m31();
+-                *row[46] = ms_9_bits_col46;
+-                let split_16_low_part_size_7_output_tmp_754f3_61 = [
+-                    ((xor_rot_12_output_tmp_754f3_42.low().as_m31())
+-                        - ((ms_9_bits_col46) * (M31_128))),
+-                    ms_9_bits_col46,
+-                ];
+-
+-                // Split 16 Low Part Size 7.
+-
+-                let ms_9_bits_tmp_754f3_62 =
+-                    ((xor_rot_32_r_12_output_tmp_754f3_43.high()) >> (UInt16_7));
+-                let ms_9_bits_col47 = ms_9_bits_tmp_754f3_62.as_m31();
+-                *row[47] = ms_9_bits_col47;
+-                let split_16_low_part_size_7_output_tmp_754f3_63 = [
+-                    ((xor_rot_12_output_tmp_754f3_42.high().as_m31())
+-                        - ((ms_9_bits_col47) * (M31_128))),
+-                    ms_9_bits_col47,
+-                ];
+-
+-                // Split 16 Low Part Size 7.
+-
+-                let ms_9_bits_tmp_754f3_64 = ((blake_g_gate_input[8].low()) >> (UInt16_7));
+-                let ms_9_bits_col48 = ms_9_bits_tmp_754f3_64.as_m31();
+-                *row[48] = ms_9_bits_col48;
+-                let split_16_low_part_size_7_output_tmp_754f3_65 = [
+-                    ((input_c_tag_limb_0_col16) - ((ms_9_bits_col48) * (M31_128))),
+-                    ms_9_bits_col48,
+-                ];
+-
+-                // Split 16 Low Part Size 7.
+-
+-                let ms_9_bits_tmp_754f3_66 = ((blake_g_gate_input[8].high()) >> (UInt16_7));
+-                let ms_9_bits_col49 = ms_9_bits_tmp_754f3_66.as_m31();
+-                *row[49] = ms_9_bits_col49;
+-                let split_16_low_part_size_7_output_tmp_754f3_67 = [
+-                    ((input_c_tag_limb_1_col17) - ((ms_9_bits_col49) * (M31_128))),
+-                    ms_9_bits_col49,
+-                ];
+-
+-                // Split 16 Low Part Size 9.
+-
+-                let ms_7_bits_tmp_754f3_68 = ((blake_g_gate_input[7].low()) >> (UInt16_9));
+-                let ms_7_bits_col50 = ms_7_bits_tmp_754f3_68.as_m31();
+-                *row[50] = ms_7_bits_col50;
+-                let split_16_low_part_size_9_output_tmp_754f3_69 = [
+-                    ((input_b_tag_limb_0_col14) - ((ms_7_bits_col50) * (M31_512))),
+-                    ms_7_bits_col50,
+-                ];
+-
+-                // Split 16 Low Part Size 9.
+-
+-                let ms_7_bits_tmp_754f3_70 = ((blake_g_gate_input[7].high()) >> (UInt16_9));
+-                let ms_7_bits_col51 = ms_7_bits_tmp_754f3_70.as_m31();
+-                *row[51] = ms_7_bits_col51;
+-                let split_16_low_part_size_9_output_tmp_754f3_71 = [
+-                    ((input_b_tag_limb_1_col15) - ((ms_7_bits_col51) * (M31_512))),
+-                    ms_7_bits_col51,
+-                ];
+-
+-                *sub_component_inputs.verify_bitwise_xor_9[0] = [
+-                    ms_9_bits_col46,
+-                    ms_9_bits_col48,
+-                    split_16_low_part_size_9_output_tmp_754f3_69[0],
+-                ];
+-                *lookup_data.verify_bitwise_xor_9_0 = [
+-                    M31_95781001,
+-                    ms_9_bits_col46,
+-                    ms_9_bits_col48,
+-                    split_16_low_part_size_9_output_tmp_754f3_69[0],
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_7[0] = [
+-                    split_16_low_part_size_7_output_tmp_754f3_63[0],
+-                    split_16_low_part_size_7_output_tmp_754f3_67[0],
+-                    ms_7_bits_col50,
+-                ];
+-                *lookup_data.verify_bitwise_xor_7_0 = [
+-                    M31_62225763,
+-                    split_16_low_part_size_7_output_tmp_754f3_63[0],
+-                    split_16_low_part_size_7_output_tmp_754f3_67[0],
+-                    ms_7_bits_col50,
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_9[1] = [
+-                    ms_9_bits_col47,
+-                    ms_9_bits_col49,
+-                    split_16_low_part_size_9_output_tmp_754f3_71[0],
+-                ];
+-                *lookup_data.verify_bitwise_xor_9_1 = [
+-                    M31_95781001,
+-                    ms_9_bits_col47,
+-                    ms_9_bits_col49,
+-                    split_16_low_part_size_9_output_tmp_754f3_71[0],
+-                ];
+-                *sub_component_inputs.verify_bitwise_xor_7[1] = [
+-                    split_16_low_part_size_7_output_tmp_754f3_61[0],
+-                    split_16_low_part_size_7_output_tmp_754f3_65[0],
+-                    ms_7_bits_col51,
+-                ];
+-                *lookup_data.verify_bitwise_xor_7_1 = [
+-                    M31_62225763,
+-                    split_16_low_part_size_7_output_tmp_754f3_61[0],
+-                    split_16_low_part_size_7_output_tmp_754f3_65[0],
+-                    ms_7_bits_col51,
+-                ];
+-
+-                *lookup_data.gate_0 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_a,
+-                    input_a_limb_0_col0,
+-                    input_a_limb_1_col1,
+-                ];
+-                *lookup_data.gate_1 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_b,
+-                    input_b_limb_0_col2,
+-                    input_b_limb_1_col3,
+-                ];
+-                *lookup_data.gate_2 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_c,
+-                    input_c_limb_0_col4,
+-                    input_c_limb_1_col5,
+-                ];
+-                *lookup_data.gate_3 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_d,
+-                    input_d_limb_0_col6,
+-                    input_d_limb_1_col7,
+-                ];
+-                *lookup_data.gate_4 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_f0,
+-                    input_f0_limb_0_col8,
+-                    input_f0_limb_1_col9,
+-                ];
+-                *lookup_data.gate_5 = [
+-                    M31_378353459,
+-                    blake_g_gate_input_addr_f1,
+-                    input_f1_limb_0_col10,
+-                    input_f1_limb_1_col11,
+-                ];
+-                *lookup_data.gate_6 = [
+-                    M31_378353459,
+-                    blake_g_gate_output_addr_a,
+-                    input_a_tag_limb_0_col12,
+-                    input_a_tag_limb_1_col13,
+-                ];
+-                *lookup_data.gate_7 = [
+-                    M31_378353459,
+-                    blake_g_gate_output_addr_b,
+-                    input_b_tag_limb_0_col14,
+-                    input_b_tag_limb_1_col15,
+-                ];
+-                *lookup_data.gate_8 = [
+-                    M31_378353459,
+-                    blake_g_gate_output_addr_c,
+-                    input_c_tag_limb_0_col16,
+-                    input_c_tag_limb_1_col17,
+-                ];
+-                *lookup_data.gate_9 = [
+-                    M31_378353459,
+-                    blake_g_gate_output_addr_d,
+-                    input_d_tag_limb_0_col18,
+-                    input_d_tag_limb_1_col19,
+-                ];
+-                *lookup_data.mults_0 = blake_g_gate_multiplicity;
+-            },
+-        );
+-
+-    (trace, lookup_data, sub_component_inputs)
++        .for_each(|(row_index, (row, lookup_data, blake_g_gate_input))| {
++            let blake_g_gate_input_addr_a = blake_g_gate_input_addr_a[row_index];
++            let blake_g_gate_input_addr_b = blake_g_gate_input_addr_b[row_index];
++            let blake_g_gate_input_addr_c = blake_g_gate_input_addr_c[row_index];
++            let blake_g_gate_input_addr_d = blake_g_gate_input_addr_d[row_index];
++            let blake_g_gate_input_addr_f0 = blake_g_gate_input_addr_f0[row_index];
++            let blake_g_gate_input_addr_f1 = blake_g_gate_input_addr_f1[row_index];
++            let blake_g_gate_output_addr_a = blake_g_gate_output_addr_a[row_index];
++            let blake_g_gate_output_addr_b = blake_g_gate_output_addr_b[row_index];
++            let blake_g_gate_output_addr_c = blake_g_gate_output_addr_c[row_index];
++            let blake_g_gate_output_addr_d = blake_g_gate_output_addr_d[row_index];
++            let blake_g_gate_multiplicity = blake_g_gate_multiplicity[row_index];
++            let input_a_limb_0_col0 = blake_g_gate_input[0].low().as_m31();
++            *row[0] = input_a_limb_0_col0;
++            let input_a_limb_1_col1 = blake_g_gate_input[0].high().as_m31();
++            *row[1] = input_a_limb_1_col1;
++            let input_b_limb_0_col2 = blake_g_gate_input[1].low().as_m31();
++            *row[2] = input_b_limb_0_col2;
++            let input_b_limb_1_col3 = blake_g_gate_input[1].high().as_m31();
++            *row[3] = input_b_limb_1_col3;
++            let input_c_limb_0_col4 = blake_g_gate_input[2].low().as_m31();
++            *row[4] = input_c_limb_0_col4;
++            let input_c_limb_1_col5 = blake_g_gate_input[2].high().as_m31();
++            *row[5] = input_c_limb_1_col5;
++            let input_d_limb_0_col6 = blake_g_gate_input[3].low().as_m31();
++            *row[6] = input_d_limb_0_col6;
++            let input_d_limb_1_col7 = blake_g_gate_input[3].high().as_m31();
++            *row[7] = input_d_limb_1_col7;
++            let input_f0_limb_0_col8 = blake_g_gate_input[4].low().as_m31();
++            *row[8] = input_f0_limb_0_col8;
++            let input_f0_limb_1_col9 = blake_g_gate_input[4].high().as_m31();
++            *row[9] = input_f0_limb_1_col9;
++            let input_f1_limb_0_col10 = blake_g_gate_input[5].low().as_m31();
++            *row[10] = input_f1_limb_0_col10;
++            let input_f1_limb_1_col11 = blake_g_gate_input[5].high().as_m31();
++            *row[11] = input_f1_limb_1_col11;
++            let input_a_tag_limb_0_col12 = blake_g_gate_input[6].low().as_m31();
++            *row[12] = input_a_tag_limb_0_col12;
++            let input_a_tag_limb_1_col13 = blake_g_gate_input[6].high().as_m31();
++            *row[13] = input_a_tag_limb_1_col13;
++            let input_b_tag_limb_0_col14 = blake_g_gate_input[7].low().as_m31();
++            *row[14] = input_b_tag_limb_0_col14;
++            let input_b_tag_limb_1_col15 = blake_g_gate_input[7].high().as_m31();
++            *row[15] = input_b_tag_limb_1_col15;
++            let input_c_tag_limb_0_col16 = blake_g_gate_input[8].low().as_m31();
++            *row[16] = input_c_tag_limb_0_col16;
++            let input_c_tag_limb_1_col17 = blake_g_gate_input[8].high().as_m31();
++            *row[17] = input_c_tag_limb_1_col17;
++            let input_d_tag_limb_0_col18 = blake_g_gate_input[9].low().as_m31();
++            *row[18] = input_d_tag_limb_0_col18;
++            let input_d_tag_limb_1_col19 = blake_g_gate_input[9].high().as_m31();
++            *row[19] = input_d_tag_limb_1_col19;
++
++            // Triple Sum 32.
++
++            let triple_sum32_res_tmp_754f3_0 =
++                (((blake_g_gate_input[0]) + (blake_g_gate_input[1])) + (blake_g_gate_input[4]));
++            let triple_sum32_res_limb_0_col20 = triple_sum32_res_tmp_754f3_0.low().as_m31();
++            *row[20] = triple_sum32_res_limb_0_col20;
++            let triple_sum32_res_limb_1_col21 = triple_sum32_res_tmp_754f3_0.high().as_m31();
++            *row[21] = triple_sum32_res_limb_1_col21;
++            let triple_sum_32_output_tmp_754f3_3 = triple_sum32_res_tmp_754f3_0;
++
++            // Xor Rot 32 R 16.
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_4 = ((triple_sum_32_output_tmp_754f3_3.low()) >> (UInt16_8));
++            let ms_8_bits_col22 = ms_8_bits_tmp_754f3_4.as_m31();
++            *row[22] = ms_8_bits_col22;
++            let split_16_low_part_size_8_output_tmp_754f3_5 = [
++                ((triple_sum32_res_limb_0_col20) - ((ms_8_bits_col22) * (M31_256))),
++                ms_8_bits_col22,
++            ];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_6 = ((triple_sum_32_output_tmp_754f3_3.high()) >> (UInt16_8));
++            let ms_8_bits_col23 = ms_8_bits_tmp_754f3_6.as_m31();
++            *row[23] = ms_8_bits_col23;
++            let split_16_low_part_size_8_output_tmp_754f3_7 = [
++                ((triple_sum32_res_limb_1_col21) - ((ms_8_bits_col23) * (M31_256))),
++                ms_8_bits_col23,
++            ];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_8 = ((blake_g_gate_input[3].low()) >> (UInt16_8));
++            let ms_8_bits_col24 = ms_8_bits_tmp_754f3_8.as_m31();
++            *row[24] = ms_8_bits_col24;
++            let split_16_low_part_size_8_output_tmp_754f3_9 =
++                [((input_d_limb_0_col6) - ((ms_8_bits_col24) * (M31_256))), ms_8_bits_col24];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_10 = ((blake_g_gate_input[3].high()) >> (UInt16_8));
++            let ms_8_bits_col25 = ms_8_bits_tmp_754f3_10.as_m31();
++            *row[25] = ms_8_bits_col25;
++            let split_16_low_part_size_8_output_tmp_754f3_11 =
++                [((input_d_limb_1_col7) - ((ms_8_bits_col25) * (M31_256))), ms_8_bits_col25];
++
++            // Bitwise Xor Num Bits 8.
++
++            let xor_tmp_754f3_12 =
++                ((PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_5[0]))
++                    ^ (PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_9[0])));
++            let xor_col26 = xor_tmp_754f3_12.as_m31();
++            *row[26] = xor_col26;
++            *lookup_data.verify_bitwise_xor_8_0 = [
++                split_16_low_part_size_8_output_tmp_754f3_5[0],
++                split_16_low_part_size_8_output_tmp_754f3_9[0],
++                xor_col26,
++            ];
++
++            // Bitwise Xor Num Bits 8.
++
++            let xor_tmp_754f3_14 = ((PackedUInt16::from_m31(ms_8_bits_col22))
++                ^ (PackedUInt16::from_m31(ms_8_bits_col24)));
++            let xor_col27 = xor_tmp_754f3_14.as_m31();
++            *row[27] = xor_col27;
++            *lookup_data.verify_bitwise_xor_8_1 = [ms_8_bits_col22, ms_8_bits_col24, xor_col27];
++
++            // Bitwise Xor Num Bits 8 B.
++
++            let xor_tmp_754f3_16 =
++                ((PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_7[0]))
++                    ^ (PackedUInt16::from_m31(split_16_low_part_size_8_output_tmp_754f3_11[0])));
++            let xor_col28 = xor_tmp_754f3_16.as_m31();
++            *row[28] = xor_col28;
++            *lookup_data.verify_bitwise_xor_8_b_0 = [
++                split_16_low_part_size_8_output_tmp_754f3_7[0],
++                split_16_low_part_size_8_output_tmp_754f3_11[0],
++                xor_col28,
++            ];
++
++            // Bitwise Xor Num Bits 8 B.
++
++            let xor_tmp_754f3_18 = ((PackedUInt16::from_m31(ms_8_bits_col23))
++                ^ (PackedUInt16::from_m31(ms_8_bits_col25)));
++            let xor_col29 = xor_tmp_754f3_18.as_m31();
++            *row[29] = xor_col29;
++            *lookup_data.verify_bitwise_xor_8_b_1 = [ms_8_bits_col23, ms_8_bits_col25, xor_col29];
++
++            let xor_rot_16_output_tmp_754f3_20 = PackedUInt32::from_limbs([
++                ((xor_col28) + ((xor_col29) * (M31_256))),
++                ((xor_col26) + ((xor_col27) * (M31_256))),
++            ]);
++            let xor_rot_32_r_16_output_tmp_754f3_21 = xor_rot_16_output_tmp_754f3_20;
++
++            // Triple Sum 32.
++
++            let triple_sum32_res_tmp_754f3_22 =
++                (((blake_g_gate_input[2]) + (xor_rot_32_r_16_output_tmp_754f3_21)) + (UInt32_0));
++            let triple_sum32_res_limb_0_col30 = triple_sum32_res_tmp_754f3_22.low().as_m31();
++            *row[30] = triple_sum32_res_limb_0_col30;
++            let triple_sum32_res_limb_1_col31 = triple_sum32_res_tmp_754f3_22.high().as_m31();
++            *row[31] = triple_sum32_res_limb_1_col31;
++            let triple_sum_32_output_tmp_754f3_25 = triple_sum32_res_tmp_754f3_22;
++
++            // Xor Rot 32 R 12.
++
++            // Split 16 Low Part Size 12.
++
++            let ms_4_bits_tmp_754f3_26 = ((blake_g_gate_input[1].low()) >> (UInt16_12));
++            let ms_4_bits_col32 = ms_4_bits_tmp_754f3_26.as_m31();
++            *row[32] = ms_4_bits_col32;
++            let split_16_low_part_size_12_output_tmp_754f3_27 =
++                [((input_b_limb_0_col2) - ((ms_4_bits_col32) * (M31_4096))), ms_4_bits_col32];
++
++            // Split 16 Low Part Size 12.
++
++            let ms_4_bits_tmp_754f3_28 = ((blake_g_gate_input[1].high()) >> (UInt16_12));
++            let ms_4_bits_col33 = ms_4_bits_tmp_754f3_28.as_m31();
++            *row[33] = ms_4_bits_col33;
++            let split_16_low_part_size_12_output_tmp_754f3_29 =
++                [((input_b_limb_1_col3) - ((ms_4_bits_col33) * (M31_4096))), ms_4_bits_col33];
++
++            // Split 16 Low Part Size 12.
++
++            let ms_4_bits_tmp_754f3_30 = ((triple_sum_32_output_tmp_754f3_25.low()) >> (UInt16_12));
++            let ms_4_bits_col34 = ms_4_bits_tmp_754f3_30.as_m31();
++            *row[34] = ms_4_bits_col34;
++            let split_16_low_part_size_12_output_tmp_754f3_31 = [
++                ((triple_sum32_res_limb_0_col30) - ((ms_4_bits_col34) * (M31_4096))),
++                ms_4_bits_col34,
++            ];
++
++            // Split 16 Low Part Size 12.
++
++            let ms_4_bits_tmp_754f3_32 =
++                ((triple_sum_32_output_tmp_754f3_25.high()) >> (UInt16_12));
++            let ms_4_bits_col35 = ms_4_bits_tmp_754f3_32.as_m31();
++            *row[35] = ms_4_bits_col35;
++            let split_16_low_part_size_12_output_tmp_754f3_33 = [
++                ((triple_sum32_res_limb_1_col31) - ((ms_4_bits_col35) * (M31_4096))),
++                ms_4_bits_col35,
++            ];
++
++            // Bitwise Xor Num Bits 12.
++
++            let xor_tmp_754f3_34 =
++                ((PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_27[0]))
++                    ^ (PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_31[0])));
++            let xor_col36 = xor_tmp_754f3_34.as_m31();
++            *row[36] = xor_col36;
++            *lookup_data.verify_bitwise_xor_12_0 = [
++                split_16_low_part_size_12_output_tmp_754f3_27[0],
++                split_16_low_part_size_12_output_tmp_754f3_31[0],
++                xor_col36,
++            ];
++
++            // Bitwise Xor Num Bits 4.
++
++            let xor_tmp_754f3_36 = ((PackedUInt16::from_m31(ms_4_bits_col32))
++                ^ (PackedUInt16::from_m31(ms_4_bits_col34)));
++            let xor_col37 = xor_tmp_754f3_36.as_m31();
++            *row[37] = xor_col37;
++            *lookup_data.verify_bitwise_xor_4_0 = [ms_4_bits_col32, ms_4_bits_col34, xor_col37];
++
++            // Bitwise Xor Num Bits 12.
++
++            let xor_tmp_754f3_38 =
++                ((PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_29[0]))
++                    ^ (PackedUInt16::from_m31(split_16_low_part_size_12_output_tmp_754f3_33[0])));
++            let xor_col38 = xor_tmp_754f3_38.as_m31();
++            *row[38] = xor_col38;
++            *lookup_data.verify_bitwise_xor_12_1 = [
++                split_16_low_part_size_12_output_tmp_754f3_29[0],
++                split_16_low_part_size_12_output_tmp_754f3_33[0],
++                xor_col38,
++            ];
++
++            // Bitwise Xor Num Bits 4.
++
++            let xor_tmp_754f3_40 = ((PackedUInt16::from_m31(ms_4_bits_col33))
++                ^ (PackedUInt16::from_m31(ms_4_bits_col35)));
++            let xor_col39 = xor_tmp_754f3_40.as_m31();
++            *row[39] = xor_col39;
++            *lookup_data.verify_bitwise_xor_4_1 = [ms_4_bits_col33, ms_4_bits_col35, xor_col39];
++
++            let xor_rot_12_output_tmp_754f3_42 = PackedUInt32::from_limbs([
++                ((xor_col37) + ((xor_col38) * (M31_16))),
++                ((xor_col39) + ((xor_col36) * (M31_16))),
++            ]);
++            let xor_rot_32_r_12_output_tmp_754f3_43 = xor_rot_12_output_tmp_754f3_42;
++
++            // Verify Xor Rot 32 R 8.
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_46 = ((blake_g_gate_input[6].low()) >> (UInt16_8));
++            let ms_8_bits_col40 = ms_8_bits_tmp_754f3_46.as_m31();
++            *row[40] = ms_8_bits_col40;
++            let split_16_low_part_size_8_output_tmp_754f3_47 =
++                [((input_a_tag_limb_0_col12) - ((ms_8_bits_col40) * (M31_256))), ms_8_bits_col40];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_48 = ((blake_g_gate_input[6].high()) >> (UInt16_8));
++            let ms_8_bits_col41 = ms_8_bits_tmp_754f3_48.as_m31();
++            *row[41] = ms_8_bits_col41;
++            let split_16_low_part_size_8_output_tmp_754f3_49 =
++                [((input_a_tag_limb_1_col13) - ((ms_8_bits_col41) * (M31_256))), ms_8_bits_col41];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_50 =
++                ((xor_rot_32_r_16_output_tmp_754f3_21.low()) >> (UInt16_8));
++            let ms_8_bits_col42 = ms_8_bits_tmp_754f3_50.as_m31();
++            *row[42] = ms_8_bits_col42;
++            let split_16_low_part_size_8_output_tmp_754f3_51 = [
++                ((xor_rot_16_output_tmp_754f3_20.low().as_m31()) - ((ms_8_bits_col42) * (M31_256))),
++                ms_8_bits_col42,
++            ];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_52 =
++                ((xor_rot_32_r_16_output_tmp_754f3_21.high()) >> (UInt16_8));
++            let ms_8_bits_col43 = ms_8_bits_tmp_754f3_52.as_m31();
++            *row[43] = ms_8_bits_col43;
++            let split_16_low_part_size_8_output_tmp_754f3_53 = [
++                ((xor_rot_16_output_tmp_754f3_20.high().as_m31())
++                    - ((ms_8_bits_col43) * (M31_256))),
++                ms_8_bits_col43,
++            ];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_54 = ((blake_g_gate_input[9].low()) >> (UInt16_8));
++            let ms_8_bits_col44 = ms_8_bits_tmp_754f3_54.as_m31();
++            *row[44] = ms_8_bits_col44;
++            let split_16_low_part_size_8_output_tmp_754f3_55 =
++                [((input_d_tag_limb_0_col18) - ((ms_8_bits_col44) * (M31_256))), ms_8_bits_col44];
++
++            // Split 16 Low Part Size 8.
++
++            let ms_8_bits_tmp_754f3_56 = ((blake_g_gate_input[9].high()) >> (UInt16_8));
++            let ms_8_bits_col45 = ms_8_bits_tmp_754f3_56.as_m31();
++            *row[45] = ms_8_bits_col45;
++            let split_16_low_part_size_8_output_tmp_754f3_57 =
++                [((input_d_tag_limb_1_col19) - ((ms_8_bits_col45) * (M31_256))), ms_8_bits_col45];
++            *lookup_data.verify_bitwise_xor_8_2 =
++                [ms_8_bits_col40, ms_8_bits_col42, split_16_low_part_size_8_output_tmp_754f3_55[0]];
++            *lookup_data.verify_bitwise_xor_8_3 = [
++                split_16_low_part_size_8_output_tmp_754f3_49[0],
++                split_16_low_part_size_8_output_tmp_754f3_53[0],
++                ms_8_bits_col44,
++            ];
++            *lookup_data.verify_bitwise_xor_8_4 =
++                [ms_8_bits_col41, ms_8_bits_col43, split_16_low_part_size_8_output_tmp_754f3_57[0]];
++            *lookup_data.verify_bitwise_xor_8_5 = [
++                split_16_low_part_size_8_output_tmp_754f3_47[0],
++                split_16_low_part_size_8_output_tmp_754f3_51[0],
++                ms_8_bits_col45,
++            ];
++
++            // Verify Xor Rot 32 R 7.
++
++            // Split 16 Low Part Size 7.
++
++            let ms_9_bits_tmp_754f3_60 =
++                ((xor_rot_32_r_12_output_tmp_754f3_43.low()) >> (UInt16_7));
++            let ms_9_bits_col46 = ms_9_bits_tmp_754f3_60.as_m31();
++            *row[46] = ms_9_bits_col46;
++            let split_16_low_part_size_7_output_tmp_754f3_61 = [
++                ((xor_rot_12_output_tmp_754f3_42.low().as_m31()) - ((ms_9_bits_col46) * (M31_128))),
++                ms_9_bits_col46,
++            ];
++
++            // Split 16 Low Part Size 7.
++
++            let ms_9_bits_tmp_754f3_62 =
++                ((xor_rot_32_r_12_output_tmp_754f3_43.high()) >> (UInt16_7));
++            let ms_9_bits_col47 = ms_9_bits_tmp_754f3_62.as_m31();
++            *row[47] = ms_9_bits_col47;
++            let split_16_low_part_size_7_output_tmp_754f3_63 = [
++                ((xor_rot_12_output_tmp_754f3_42.high().as_m31())
++                    - ((ms_9_bits_col47) * (M31_128))),
++                ms_9_bits_col47,
++            ];
++
++            // Split 16 Low Part Size 7.
++
++            let ms_9_bits_tmp_754f3_64 = ((blake_g_gate_input[8].low()) >> (UInt16_7));
++            let ms_9_bits_col48 = ms_9_bits_tmp_754f3_64.as_m31();
++            *row[48] = ms_9_bits_col48;
++            let split_16_low_part_size_7_output_tmp_754f3_65 =
++                [((input_c_tag_limb_0_col16) - ((ms_9_bits_col48) * (M31_128))), ms_9_bits_col48];
++
++            // Split 16 Low Part Size 7.
++
++            let ms_9_bits_tmp_754f3_66 = ((blake_g_gate_input[8].high()) >> (UInt16_7));
++            let ms_9_bits_col49 = ms_9_bits_tmp_754f3_66.as_m31();
++            *row[49] = ms_9_bits_col49;
++            let split_16_low_part_size_7_output_tmp_754f3_67 =
++                [((input_c_tag_limb_1_col17) - ((ms_9_bits_col49) * (M31_128))), ms_9_bits_col49];
++
++            // Split 16 Low Part Size 9.
++
++            let ms_7_bits_tmp_754f3_68 = ((blake_g_gate_input[7].low()) >> (UInt16_9));
++            let ms_7_bits_col50 = ms_7_bits_tmp_754f3_68.as_m31();
++            *row[50] = ms_7_bits_col50;
++            let split_16_low_part_size_9_output_tmp_754f3_69 =
++                [((input_b_tag_limb_0_col14) - ((ms_7_bits_col50) * (M31_512))), ms_7_bits_col50];
++
++            // Split 16 Low Part Size 9.
++
++            let ms_7_bits_tmp_754f3_70 = ((blake_g_gate_input[7].high()) >> (UInt16_9));
++            let ms_7_bits_col51 = ms_7_bits_tmp_754f3_70.as_m31();
++            *row[51] = ms_7_bits_col51;
++            let split_16_low_part_size_9_output_tmp_754f3_71 =
++                [((input_b_tag_limb_1_col15) - ((ms_7_bits_col51) * (M31_512))), ms_7_bits_col51];
++            *lookup_data.verify_bitwise_xor_9_0 =
++                [ms_9_bits_col46, ms_9_bits_col48, split_16_low_part_size_9_output_tmp_754f3_69[0]];
++            *lookup_data.verify_bitwise_xor_7_0 = [
++                split_16_low_part_size_7_output_tmp_754f3_63[0],
++                split_16_low_part_size_7_output_tmp_754f3_67[0],
++                ms_7_bits_col50,
++            ];
++            *lookup_data.verify_bitwise_xor_9_1 =
++                [ms_9_bits_col47, ms_9_bits_col49, split_16_low_part_size_9_output_tmp_754f3_71[0]];
++            *lookup_data.verify_bitwise_xor_7_1 = [
++                split_16_low_part_size_7_output_tmp_754f3_61[0],
++                split_16_low_part_size_7_output_tmp_754f3_65[0],
++                ms_7_bits_col51,
++            ];
++
++            *lookup_data.gate_0 =
++                [blake_g_gate_input_addr_a, input_a_limb_0_col0, input_a_limb_1_col1];
++            *lookup_data.gate_1 =
++                [blake_g_gate_input_addr_b, input_b_limb_0_col2, input_b_limb_1_col3];
++            *lookup_data.gate_2 =
++                [blake_g_gate_input_addr_c, input_c_limb_0_col4, input_c_limb_1_col5];
++            *lookup_data.gate_3 =
++                [blake_g_gate_input_addr_d, input_d_limb_0_col6, input_d_limb_1_col7];
++            *lookup_data.gate_4 =
++                [blake_g_gate_input_addr_f0, input_f0_limb_0_col8, input_f0_limb_1_col9];
++            *lookup_data.gate_5 =
++                [blake_g_gate_input_addr_f1, input_f1_limb_0_col10, input_f1_limb_1_col11];
++            *lookup_data.gate_6 =
++                [blake_g_gate_output_addr_a, input_a_tag_limb_0_col12, input_a_tag_limb_1_col13];
++            *lookup_data.gate_7 =
++                [blake_g_gate_output_addr_b, input_b_tag_limb_0_col14, input_b_tag_limb_1_col15];
++            *lookup_data.gate_8 =
++                [blake_g_gate_output_addr_c, input_c_tag_limb_0_col16, input_c_tag_limb_1_col17];
++            *lookup_data.gate_9 =
++                [blake_g_gate_output_addr_d, input_d_tag_limb_0_col18, input_d_tag_limb_1_col19];
++            *lookup_data.mults_0 = blake_g_gate_multiplicity;
++        });
++
++    (trace, lookup_data)
+ }
+ 
+ #[derive(Uninitialized, IterMut, ParIterMut)]
+ struct LookupData {
+-    gate_0: Vec<[PackedM31; 4]>,
+-    gate_1: Vec<[PackedM31; 4]>,
+-    gate_2: Vec<[PackedM31; 4]>,
+-    gate_3: Vec<[PackedM31; 4]>,
+-    gate_4: Vec<[PackedM31; 4]>,
+-    gate_5: Vec<[PackedM31; 4]>,
+-    gate_6: Vec<[PackedM31; 4]>,
+-    gate_7: Vec<[PackedM31; 4]>,
+-    gate_8: Vec<[PackedM31; 4]>,
+-    gate_9: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_12_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_12_1: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_4_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_4_1: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_7_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_7_1: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_1: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_2: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_3: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_4: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_5: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_b_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_8_b_1: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_9_0: Vec<[PackedM31; 4]>,
+-    verify_bitwise_xor_9_1: Vec<[PackedM31; 4]>,
++    gate_0: Vec<[PackedM31; 3]>,
++    gate_1: Vec<[PackedM31; 3]>,
++    gate_2: Vec<[PackedM31; 3]>,
++    gate_3: Vec<[PackedM31; 3]>,
++    gate_4: Vec<[PackedM31; 3]>,
++    gate_5: Vec<[PackedM31; 3]>,
++    gate_6: Vec<[PackedM31; 3]>,
++    gate_7: Vec<[PackedM31; 3]>,
++    gate_8: Vec<[PackedM31; 3]>,
++    gate_9: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_12_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_12_1: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_4_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_4_1: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_7_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_7_1: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_1: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_2: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_3: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_4: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_5: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_b_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_8_b_1: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_9_0: Vec<[PackedM31; 3]>,
++    verify_bitwise_xor_9_1: Vec<[PackedM31; 3]>,
+     mults_0: Vec<PackedM31>,
+ }
+ 
+@@ -885,178 +691,109 @@ impl InteractionClaimGenerator {
+     ) -> (Vec<CircleEvaluation<SimdBackend, M31, BitReversedOrder>>, InteractionClaim) {
+         let mut logup_gen = unsafe { LogupTraceGenerator::uninitialized(self.log_size) };
+ 
+-        //Sum logup terms in pairs.
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_8_0,
+-            &self.lookup_data.verify_bitwise_xor_8_1,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_8_b_0,
+-            &self.lookup_data.verify_bitwise_xor_8_b_1,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_12_0,
+-            &self.lookup_data.verify_bitwise_xor_4_0,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_12_1,
+-            &self.lookup_data.verify_bitwise_xor_4_1,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_8_2,
+-            &self.lookup_data.verify_bitwise_xor_8_3,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_8_4,
+-            &self.lookup_data.verify_bitwise_xor_8_5,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_9_0,
+-            &self.lookup_data.verify_bitwise_xor_7_0,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.verify_bitwise_xor_9_1,
+-            &self.lookup_data.verify_bitwise_xor_7_1,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (col_gen.par_iter_mut(), &self.lookup_data.gate_0, &self.lookup_data.gate_1)
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (col_gen.par_iter_mut(), &self.lookup_data.gate_2, &self.lookup_data.gate_3)
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (col_gen.par_iter_mut(), &self.lookup_data.gate_4, &self.lookup_data.gate_5)
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(denom0 + denom1, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.gate_6,
+-            &self.lookup_data.gate_7,
+-            &self.lookup_data.mults_0,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1, mults_0)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(-(denom0 + denom1) * *mults_0, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
+-
+-        let mut col_gen = logup_gen.new_col();
+-        (
+-            col_gen.par_iter_mut(),
+-            &self.lookup_data.gate_8,
+-            &self.lookup_data.gate_9,
+-            &self.lookup_data.mults_0,
+-        )
+-            .into_par_iter()
+-            .for_each(|(writer, values0, values1, mults_0)| {
+-                let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-                let denom1: PackedQM31 = common_lookup_elements.combine(values1);
+-                writer.write_frac(-(denom0 + denom1) * *mults_0, denom0 * denom1);
+-            });
+-        col_gen.finalize_col();
++        // Generate the interaction columns within one row-chunk pass.
++        logup_gen.write_frac_cols(13, |column, row| {
++            let (values0, values1, tag0, tag1) = match column {
++                0 => (
++                    &self.lookup_data.verify_bitwise_xor_8_0[row],
++                    &self.lookup_data.verify_bitwise_xor_8_1[row],
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                ),
++                1 => (
++                    &self.lookup_data.verify_bitwise_xor_8_b_0[row],
++                    &self.lookup_data.verify_bitwise_xor_8_b_1[row],
++                    relations::VERIFY_BITWISE_XOR_8_B_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_8_B_RELATION_ID,
++                ),
++                2 => (
++                    &self.lookup_data.verify_bitwise_xor_12_0[row],
++                    &self.lookup_data.verify_bitwise_xor_4_0[row],
++                    relations::VERIFY_BITWISE_XOR_12_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_4_RELATION_ID,
++                ),
++                3 => (
++                    &self.lookup_data.verify_bitwise_xor_12_1[row],
++                    &self.lookup_data.verify_bitwise_xor_4_1[row],
++                    relations::VERIFY_BITWISE_XOR_12_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_4_RELATION_ID,
++                ),
++                4 => (
++                    &self.lookup_data.verify_bitwise_xor_8_2[row],
++                    &self.lookup_data.verify_bitwise_xor_8_3[row],
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                ),
++                5 => (
++                    &self.lookup_data.verify_bitwise_xor_8_4[row],
++                    &self.lookup_data.verify_bitwise_xor_8_5[row],
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_8_RELATION_ID,
++                ),
++                6 => (
++                    &self.lookup_data.verify_bitwise_xor_9_0[row],
++                    &self.lookup_data.verify_bitwise_xor_7_0[row],
++                    relations::VERIFY_BITWISE_XOR_9_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_7_RELATION_ID,
++                ),
++                7 => (
++                    &self.lookup_data.verify_bitwise_xor_9_1[row],
++                    &self.lookup_data.verify_bitwise_xor_7_1[row],
++                    relations::VERIFY_BITWISE_XOR_9_RELATION_ID,
++                    relations::VERIFY_BITWISE_XOR_7_RELATION_ID,
++                ),
++                8 => (
++                    &self.lookup_data.gate_0[row],
++                    &self.lookup_data.gate_1[row],
++                    relations::GATE_RELATION_ID,
++                    relations::GATE_RELATION_ID,
++                ),
++                9 => (
++                    &self.lookup_data.gate_2[row],
++                    &self.lookup_data.gate_3[row],
++                    relations::GATE_RELATION_ID,
++                    relations::GATE_RELATION_ID,
++                ),
++                10 => (
++                    &self.lookup_data.gate_4[row],
++                    &self.lookup_data.gate_5[row],
++                    relations::GATE_RELATION_ID,
++                    relations::GATE_RELATION_ID,
++                ),
++                11 => (
++                    &self.lookup_data.gate_6[row],
++                    &self.lookup_data.gate_7[row],
++                    relations::GATE_RELATION_ID,
++                    relations::GATE_RELATION_ID,
++                ),
++                12 => (
++                    &self.lookup_data.gate_8[row],
++                    &self.lookup_data.gate_9[row],
++                    relations::GATE_RELATION_ID,
++                    relations::GATE_RELATION_ID,
++                ),
++                _ => unreachable!(),
++            };
++            // Relation tags are constant per column; materialize them only at combination.
++            let denom0: PackedQM31 = common_lookup_elements.combine(&[
++                PackedM31::broadcast(M31::from(tag0)),
++                values0[0],
++                values0[1],
++                values0[2],
++            ]);
++            let denom1: PackedQM31 = common_lookup_elements.combine(&[
++                PackedM31::broadcast(M31::from(tag1)),
++                values1[0],
++                values1[1],
++                values1[2],
++            ]);
++            let numerator = if column < 11 {
++                denom0 + denom1
++            } else {
++                -(denom0 + denom1) * self.lookup_data.mults_0[row]
++            };
++            (numerator, denom0 * denom1)
++        });
+ 
+         let (trace, claimed_sum) = logup_gen.finalize_last();
+ 
+diff --git a/crates/circuit_prover/src/witness/components/eq.rs b/crates/circuit_prover/src/witness/components/eq.rs
+index fc975dd..5634c36 100644
+--- a/crates/circuit_prover/src/witness/components/eq.rs
++++ b/crates/circuit_prover/src/witness/components/eq.rs
+@@ -49,7 +49,7 @@ pub fn write_trace(
+     let in1_address =
+         preprocessed_trace.get_column(&PreProcessedColumnId { id: "eq_in1_address".to_owned() });
+ 
+-    let inputs = extract_component_inputs(in0_address, in1_address, context_values);
++    let inputs = extract_component_inputs(&in0_address, &in1_address, context_values);
+ 
+     let n_rows = inputs.len();
+     assert_ne!(n_rows, 0);
+diff --git a/crates/circuit_prover/src/witness/components/m_31_to_u_32.rs b/crates/circuit_prover/src/witness/components/m_31_to_u_32.rs
+index 8145a68..4e7fc55 100644
+--- a/crates/circuit_prover/src/witness/components/m_31_to_u_32.rs
++++ b/crates/circuit_prover/src/witness/components/m_31_to_u_32.rs
+@@ -1,11 +1,12 @@
+ #![allow(unused_parens)]
+-use crate::circuit_air::components::m_31_to_u_32::{Claim, InteractionClaim, N_TRACE_COLUMNS};
+-use crate::witness::components::prelude::*;
+-use crate::witness::components::range_check_16;
+ use stwo::core::fields::FieldExpOps;
+ use stwo::core::fields::qm31::QM31;
+ use stwo_cairo_common::prover_types::simd::EqExtend;
+ 
++use crate::circuit_air::components::m_31_to_u_32::{Claim, InteractionClaim, N_TRACE_COLUMNS};
++use crate::witness::components::prelude::*;
++use crate::witness::components::range_check_16;
++
+ pub type InputType = (M31, UInt32);
+ pub type PackedInputType = (PackedM31, PackedUInt32);
+ 
+@@ -42,7 +43,7 @@ pub fn write_trace(
+     let multiplicity_col = preprocessed_trace
+         .get_column(&PreProcessedColumnId { id: "m31_to_u32_multiplicity".to_owned() });
+ 
+-    let inputs = extract_component_inputs(input_addr_col, context_values);
++    let inputs = extract_component_inputs(&input_addr_col, context_values);
+ 
+     let n_rows = inputs.len();
+     assert_ne!(n_rows, 0);
+@@ -165,7 +166,7 @@ impl InteractionClaimGenerator {
+         let common_lookup_elements = _common_lookup_elements;
+         let mut logup_gen = unsafe { LogupTraceGenerator::uninitialized(self.log_size) };
+ 
+-        //Sum logup terms in pairs.
++        // Sum logup terms in pairs.
+         let mut col_gen = logup_gen.new_col();
+         (
+             col_gen.par_iter_mut(),
+@@ -190,7 +191,7 @@ impl InteractionClaimGenerator {
+             });
+         col_gen.finalize_col();
+ 
+-        //Sum last logup term.
++        // Sum last logup term.
+         let mut col_gen = logup_gen.new_col();
+         (col_gen.par_iter_mut(), &self.lookup_data.gate_1, &self.lookup_data.mults_0)
+             .into_par_iter()
+diff --git a/crates/circuit_prover/src/witness/components/prelude.rs b/crates/circuit_prover/src/witness/components/prelude.rs
+index 8a97bf5..88b2d89 100644
+--- a/crates/circuit_prover/src/witness/components/prelude.rs
++++ b/crates/circuit_prover/src/witness/components/prelude.rs
+@@ -1,30 +1,21 @@
+-pub use crate::witness::utils::pack_values;
++pub use std::array::from_fn;
++pub use std::simd::num::{SimdInt, SimdUint};
++pub use std::simd::{Simd, u32x16};
++pub use std::sync::Arc;
++pub use std::sync::atomic::{AtomicU32, Ordering};
++
+ pub use circuit_common::Qm31OpsTraceGenerator;
+ pub use circuit_common::preprocessed::PreProcessedTrace;
+-pub use circuit_verifier::circuit_claim::ClaimedSum;
+-pub use circuit_verifier::circuit_claim::ComponentLogSize;
++pub use circuit_verifier::circuit_claim::{ClaimedSum, ComponentLogSize};
+ pub use circuit_verifier::relations;
+-pub use itertools::Itertools;
+-pub use itertools::multizip;
+-pub use num_traits::One;
+-pub use num_traits::Zero;
+-pub use rayon::iter::IndexedParallelIterator;
+-pub use rayon::iter::IntoParallelIterator;
+-pub use rayon::iter::IntoParallelRefIterator;
+-pub use rayon::iter::IntoParallelRefMutIterator;
+-pub use rayon::iter::ParallelIterator;
+-pub use std::array::from_fn;
+-pub use std::collections::HashMap;
+-pub use std::simd::Simd;
+-pub use std::simd::num::SimdInt;
+-pub use std::simd::num::SimdUint;
+-pub use std::simd::u32x16;
+-pub use std::sync::Arc;
+-pub use std::sync::atomic::AtomicU32;
+-pub use std::sync::atomic::Ordering;
++pub use itertools::{Itertools, multizip};
++pub use num_traits::{One, Zero};
++pub use rayon::iter::{
++    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
++    IntoParallelRefMutIterator, ParallelIterator,
++};
+ pub use stwo::core::fields::m31::M31;
+-pub use stwo::core::fields::qm31::QM31;
+-pub use stwo::core::fields::qm31::SecureField;
++pub use stwo::core::fields::qm31::{QM31, SecureField};
+ pub use stwo::core::poly::circle::CanonicCoset;
+ pub use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
+ pub use stwo::prover::TreeBuilder;
+@@ -50,9 +41,10 @@ pub use stwo_cairo_prover::witness::fast_deduction::blake::{
+     G_STATE_INDICES, PackedBlakeRoundSigma, PackedTripleXor32,
+ };
+ pub use stwo_cairo_prover::witness::utils::{AtomicMultiplicityColumn, Enabler};
+-pub use stwo_constraint_framework::LogupTraceGenerator;
+-pub use stwo_constraint_framework::Relation;
+ pub use stwo_constraint_framework::preprocessed_columns::PreProcessedColumnId;
++pub use stwo_constraint_framework::{LogupTraceGenerator, Relation};
++
++pub use crate::witness::utils::pack_values;
+ 
+ const NUM_INPUT_WORDS_G: usize = 6;
+ const NUM_OUTPUT_WORDS_G: usize = 4;
+@@ -102,33 +94,142 @@ impl PackedBlakeG {
+ pub fn make_input_to_row<const N: usize>(
+     preprocessed_trace: &PreProcessedTrace,
+     column_ids: [PreProcessedColumnId; N],
+-) -> HashMap<[M31; N], usize> {
+-    let mut result: HashMap<[M31; N], usize> = HashMap::new();
+-
++) -> InputToRow<N> {
+     let columns = column_ids.iter().map(|id| preprocessed_trace.get_column(id)).collect_vec();
+     let log_size = columns[0].len().ilog2();
+     assert!(
+         columns.iter().all(|c| c.len().ilog2() == log_size),
+         "input_to_row columns of different sizes"
+     );
++    InputToRow::new(1 << log_size, |i, row| columns[i][row] as u64)
++}
+ 
+-    for packed_row in 0..(1 << (log_size - LOG_N_LANES)) {
+-        let row_offset = packed_row * N_LANES;
+-        for i in 0..N_LANES {
+-            let key: [M31; N] = columns
+-                .iter()
+-                .map(|column| M31::from(column[row_offset + i]))
+-                .collect_vec()
+-                .try_into()
+-                .expect("Unexpected number of column values");
+-            result.insert(key, row_offset + i);
++pub fn pack_preprocessed_column(column: &[usize]) -> Vec<PackedM31> {
++    let values: Vec<M31> = column.par_iter().map(|&v| M31::from(v)).collect();
++    pack_values(&values)
++}
++
++/// A fast, deterministic hasher for the witness' lookup maps: their keys are small arrays of
++/// field elements, and SipHash dominates both the construction of the maps and the lookups.
++/// Iteration order is never relied on (the default hasher is randomized), so the choice of
++/// hasher cannot change the trace.
++#[derive(Default, Clone, Copy)]
++pub struct FastHasher(u64);
++
++impl std::hash::Hasher for FastHasher {
++    #[inline]
++    fn finish(&self) -> u64 {
++        self.0
++    }
++
++    #[inline]
++    fn write(&mut self, bytes: &[u8]) {
++        for chunk in bytes.chunks(8) {
++            let mut word = [0u8; 8];
++            word[..chunk.len()].copy_from_slice(chunk);
++            self.write_u64(u64::from_le_bytes(word));
+         }
+     }
+ 
+-    result
++    #[inline]
++    fn write_u32(&mut self, i: u32) {
++        self.write_u64(i as u64);
++    }
++
++    #[inline]
++    fn write_u64(&mut self, i: u64) {
++        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
++    }
++
++    #[inline]
++    fn write_usize(&mut self, i: usize) {
++        self.write_u64(i as u64);
++    }
+ }
+ 
+-pub fn pack_preprocessed_column(column: &[usize]) -> Vec<PackedM31> {
+-    let values: Vec<M31> = column.par_iter().map(|&v| M31::from(v)).collect();
+-    pack_values(&values)
++pub type FastHasherBuilder = std::hash::BuildHasherDefault<FastHasher>;
++
++/// [`std::collections::HashMap`] with [`FastHasher`].
++pub type HashMap<K, V> = std::collections::HashMap<K, V, FastHasherBuilder>;
++
++/// The row of a const-size component's preprocessed table for an input tuple.
++///
++/// When the key columns are bit fields of the row index that cover all its bits (the range-check
++/// and bitwise-xor tables: column `i` holds the bits `shift_i..shift_i + width_i` of the row,
++/// which is checked over every row when the table is built), the row is the sum of the shifted
++/// key values; otherwise it is looked up in a map.
++pub struct InputToRow<const N: usize> {
++    /// `(key index, shift)` of the bit fields; empty when the map is used.
++    fields: Vec<(usize, u32)>,
++    map: HashMap<[M31; N], usize>,
++}
++
++impl<const N: usize> InputToRow<N> {
++    pub fn rows_packed(&self, input: &[PackedM31; N]) -> [u32; 16] {
++        if self.fields.is_empty() {
++            let lanes = input.map(|p| p.to_array());
++            std::array::from_fn(|l| {
++                self.row(&std::array::from_fn(|i| lanes[i][l])).try_into().unwrap()
++            })
++        } else {
++            let mut rows = std::simd::Simd::<u32, 16>::splat(0);
++            for &(i, shift) in &self.fields {
++                rows += input[i].into_simd() << shift;
++            }
++            rows.to_array()
++        }
++    }
++
++    /// Builds the lookup for a table given as `n_rows` rows of `N` key values, `at(column, row)`.
++    pub fn new(n_rows: usize, at: impl Fn(usize, usize) -> u64) -> Self {
++        let log_size = n_rows.ilog2();
++        assert_eq!(1 << log_size, n_rows);
++        let mut fields: Vec<(usize, u32)> = Vec::new();
++        let mut covered: u64 = 0;
++        for i in 0..N {
++            // The values at the rows 1, 2, 4, ... say which bits a bit-field column would hold.
++            if at(i, 0) != 0 {
++                continue;
++            }
++            let powers: Vec<u64> = (0..log_size).map(|k| at(i, 1 << k)).collect();
++            let nonzero: Vec<usize> = (0..log_size as usize).filter(|&k| powers[k] != 0).collect();
++            let Some(&shift) = nonzero.first() else { continue };
++            let width = nonzero.len();
++            if nonzero != (shift..shift + width).collect::<Vec<_>>()
++                || !(0..width).all(|j| powers[shift + j] == 1 << j)
++            {
++                continue;
++            }
++            let field_mask = ((1u64 << width) - 1) << shift;
++            if covered & field_mask != 0 {
++                continue;
++            }
++            let low_mask = (1u64 << width) - 1;
++            if !(0..n_rows).all(|r| at(i, r) == ((r as u64) >> shift) & low_mask) {
++                continue;
++            }
++            covered |= field_mask;
++            fields.push((i, shift as u32));
++        }
++        if covered == (1u64 << log_size) - 1 {
++            return Self { fields, map: HashMap::default() };
++        }
++        let mut map: HashMap<[M31; N], usize> =
++            HashMap::with_capacity_and_hasher(n_rows, Default::default());
++        for r in 0..n_rows {
++            let key: [M31; N] = std::array::from_fn(|i| M31::from(at(i, r) as u32));
++            map.insert(key, r);
++        }
++        Self { fields: Vec::new(), map }
++    }
++
++    /// The row holding `input`.
++    #[inline]
++    pub fn row(&self, input: &[M31; N]) -> usize {
++        if self.fields.is_empty() {
++            *self.map.get(input).unwrap()
++        } else {
++            self.fields.iter().map(|&(i, shift)| (input[i].0 as usize) << shift).sum()
++        }
++    }
+ }
+diff --git a/crates/circuit_prover/src/witness/components/qm31_ops.rs b/crates/circuit_prover/src/witness/components/qm31_ops.rs
+index 37753d9..e0fdccd 100644
+--- a/crates/circuit_prover/src/witness/components/qm31_ops.rs
++++ b/crates/circuit_prover/src/witness/components/qm31_ops.rs
+@@ -85,9 +85,9 @@ pub fn write_trace(
+         preprocessed_trace.get_column(&PreProcessedColumnId { id: "qm31_ops_mults".to_owned() });
+ 
+     let inputs = extract_component_inputs(
+-        in0_address,
+-        in1_address,
+-        out_address,
++        &in0_address,
++        &in1_address,
++        &out_address,
+         context_values,
+         trace_generator,
+     );
+@@ -99,6 +99,7 @@ pub fn write_trace(
+     let log_size = n_rows.ilog2();
+ 
+     let packed_inputs = pack_values(&inputs);
++    drop(inputs);
+ 
+     let preprocessed_columns = [
+         add_flag,
+@@ -123,7 +124,6 @@ fn write_trace_simd(
+     inputs: Vec<PackedInputType>,
+     preprocessed_columns: Vec<Vec<PackedM31>>,
+ ) -> (ComponentTrace<N_TRACE_COLUMNS>, LookupData) {
+-    let m31_gate_relation_id = PackedM31::broadcast(M31::from(378353459));
+     let log_n_packed_rows = inputs.len().ilog2();
+     let log_size = log_n_packed_rows + LOG_N_LANES;
+     let (mut trace, mut lookup_data) = unsafe {
+@@ -181,12 +181,9 @@ fn write_trace_simd(
+             *row[10] = out_col10;
+             let out_col11 = qm_31_ops_input[2][3];
+             *row[11] = out_col11;
+-            *lookup_data.in_0 =
+-                [m31_gate_relation_id, in0_address, in0_col0, in0_col1, in0_col2, in0_col3];
+-            *lookup_data.in_1 =
+-                [m31_gate_relation_id, in1_address, in1_col4, in1_col5, in1_col6, in1_col7];
+-            *lookup_data.out =
+-                [m31_gate_relation_id, out_address, out_col8, out_col9, out_col10, out_col11];
++            *lookup_data.in_0 = [in0_address, in0_col0, in0_col1, in0_col2, in0_col3];
++            *lookup_data.in_1 = [in1_address, in1_col4, in1_col5, in1_col6, in1_col7];
++            *lookup_data.out = [out_address, out_col8, out_col9, out_col10, out_col11];
+             *lookup_data.mults = mults;
+         });
+ 
+@@ -195,9 +192,9 @@ fn write_trace_simd(
+ 
+ #[derive(Uninitialized, IterMut, ParIterMut)]
+ pub struct LookupData {
+-    in_0: Vec<[PackedM31; 6]>,
+-    in_1: Vec<[PackedM31; 6]>,
+-    out: Vec<[PackedM31; 6]>,
++    in_0: Vec<[PackedM31; 5]>,
++    in_1: Vec<[PackedM31; 5]>,
++    out: Vec<[PackedM31; 5]>,
+     mults: Vec<PackedM31>,
+ }
+ 
+@@ -207,13 +204,16 @@ pub fn write_interaction_trace(
+     common_lookup_elements: &relations::CommonLookupElements,
+ ) -> (Vec<CircleEvaluation<SimdBackend, M31, BitReversedOrder>>, ClaimedSum) {
+     let mut logup_gen = unsafe { LogupTraceGenerator::uninitialized(log_size) };
++    let tag = PackedM31::broadcast(M31::from(relations::GATE_RELATION_ID));
+ 
+     // Sum logup terms in pairs.
+     let mut col_gen = logup_gen.new_col();
+     (col_gen.par_iter_mut(), &lookup_data.in_0, &lookup_data.in_1).into_par_iter().for_each(
+         |(writer, values0, values1)| {
+-            let denom0: PackedQM31 = common_lookup_elements.combine(values0);
+-            let denom1: PackedQM31 = common_lookup_elements.combine(values1);
++            let denom0: PackedQM31 = common_lookup_elements
++                .combine(&[tag, values0[0], values0[1], values0[2], values0[3], values0[4]]);
++            let denom1: PackedQM31 = common_lookup_elements
++                .combine(&[tag, values1[0], values1[1], values1[2], values1[3], values1[4]]);
+             writer.write_frac(denom0 + denom1, denom0 * denom1);
+         },
+     );
+@@ -223,7 +223,8 @@ pub fn write_interaction_trace(
+     let mut col_gen = logup_gen.new_col();
+     (col_gen.par_iter_mut(), &lookup_data.out, lookup_data.mults).into_par_iter().for_each(
+         |(writer, values, mults)| {
+-            let denom = common_lookup_elements.combine(values);
++            let denom = common_lookup_elements
++                .combine(&[tag, values[0], values[1], values[2], values[3], values[4]]);
+             writer.write_frac(-PackedQM31::one() * mults, denom);
+         },
+     );
+diff --git a/crates/circuit_prover/src/witness/components/triple_xor.rs b/crates/circuit_prover/src/witness/components/triple_xor.rs
+index 9e34971..0a912d9 100644
+--- a/crates/circuit_prover/src/witness/components/triple_xor.rs
++++ b/crates/circuit_prover/src/witness/components/triple_xor.rs
+@@ -73,10 +73,10 @@ pub fn write_trace(
+         .get_column(&PreProcessedColumnId { id: "triple_xor_multiplicity".to_owned() });
+ 
+     let inputs = extract_component_inputs(
+-        input_addr_col_0,
+-        input_addr_col_1,
+-        input_addr_col_2,
+-        output_addr_col,
++        &input_addr_col_0,
++        &input_addr_col_1,
++        &input_addr_col_2,
++        &output_addr_col,
+         context_values,
+     );
+ 
+diff --git a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_12.rs b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_12.rs
+index b4edade..6592657 100644
+--- a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_12.rs
++++ b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_12.rs
+@@ -2,11 +2,11 @@
+ #![allow(dead_code)]
+ use std::simd::u32x16;
+ 
++use itertools::{Itertools, chain};
++
+ use crate::circuit_air::components::verify_bitwise_xor_12::{
+     Claim, EXPAND_BITS, InteractionClaim, LIMB_BITS, LOG_SIZE, N_MULT_COLUMNS,
+ };
+-use itertools::{Itertools, chain};
+-
+ use crate::witness::components::prelude::*;
+ 
+ pub type InputType = [M31; 3];
+@@ -48,9 +48,13 @@ impl ClaimGenerator {
+ 
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], _relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+-            packed_input.unpack().into_iter().for_each(|input| {
+-                self.add_input(&input);
+-            });
++            let [a, b] = [packed_input[0].into_simd(), packed_input[1].into_simd()];
++            let mask = std::simd::Simd::splat((1 << LIMB_BITS) - 1);
++            let column_index = ((a >> LIMB_BITS) << EXPAND_BITS) + (b >> LIMB_BITS);
++            let row_index = ((a & mask) << LIMB_BITS) + (b & mask);
++            for (column, row) in column_index.to_array().into_iter().zip(row_index.to_array()) {
++                self.mults[column as usize].increase_at(row);
++            }
+         });
+     }
+ }
+diff --git a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_4.rs b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_4.rs
+index e1a9bd9..ee361a8 100644
+--- a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_4.rs
++++ b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_4.rs
+@@ -2,7 +2,6 @@
+ use crate::circuit_air::components::verify_bitwise_xor_4::{
+     Claim, InteractionClaim, LOG_SIZE, N_TRACE_COLUMNS,
+ };
+-
+ use crate::witness::components::prelude::*;
+ 
+ pub type InputType = [M31; 3];
+@@ -10,7 +9,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -41,15 +40,14 @@ impl ClaimGenerator {
+     }
+ 
+     pub fn add_input(&self, input: &InputType, relation_index: usize) {
+-        self.mults[relation_index]
+-            .increase_at((*self.input_to_row.get(input).unwrap()).try_into().unwrap());
++        self.mults[relation_index].increase_at(self.input_to_row.row(input).try_into().unwrap());
+     }
+ 
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+-            packed_input.unpack().into_iter().for_each(|input| {
+-                self.add_input(&input, relation_index);
+-            });
++            for row in self.input_to_row.rows_packed(packed_input) {
++                self.mults[relation_index].increase_at(row);
++            }
+         });
+     }
+ }
+@@ -71,15 +69,12 @@ fn write_trace_simd(
+     };
+ 
+     let relation_id = PackedM31::broadcast(M31::from(45448144));
+-    let bitwise_xor_4_0 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_4_0".to_owned() });
+-    let bitwise_xor_4_1 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_4_1".to_owned() });
+-    let bitwise_xor_4_2 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_4_2".to_owned() });
+-    let bitwise_xor_4_0 = pack_preprocessed_column(bitwise_xor_4_0);
+-    let bitwise_xor_4_1 = pack_preprocessed_column(bitwise_xor_4_1);
+-    let bitwise_xor_4_2 = pack_preprocessed_column(bitwise_xor_4_2);
++    let bitwise_xor_4_0 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_4_0".to_owned() });
++    let bitwise_xor_4_1 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_4_1".to_owned() });
++    let bitwise_xor_4_2 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_4_2".to_owned() });
+ 
+     (trace.par_iter_mut(), lookup_data.par_iter_mut()).into_par_iter().enumerate().for_each(
+         |(row_index, (row, lookup_data))| {
+diff --git a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_7.rs b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_7.rs
+index cccee8c..42e8e41 100644
+--- a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_7.rs
++++ b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_7.rs
+@@ -2,7 +2,6 @@
+ use crate::circuit_air::components::verify_bitwise_xor_7::{
+     Claim, InteractionClaim, LOG_SIZE, N_TRACE_COLUMNS,
+ };
+-
+ use crate::witness::components::prelude::*;
+ 
+ pub type InputType = [M31; 3];
+@@ -10,7 +9,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -41,15 +40,14 @@ impl ClaimGenerator {
+     }
+ 
+     pub fn add_input(&self, input: &InputType, relation_index: usize) {
+-        self.mults[relation_index]
+-            .increase_at((*self.input_to_row.get(input).unwrap()).try_into().unwrap());
++        self.mults[relation_index].increase_at(self.input_to_row.row(input).try_into().unwrap());
+     }
+ 
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+-            packed_input.unpack().into_iter().for_each(|input| {
+-                self.add_input(&input, relation_index);
+-            });
++            for row in self.input_to_row.rows_packed(packed_input) {
++                self.mults[relation_index].increase_at(row);
++            }
+         });
+     }
+ }
+@@ -71,15 +69,12 @@ fn write_trace_simd(
+     };
+ 
+     let relation_id = PackedM31::broadcast(M31::from(62225763));
+-    let bitwise_xor_7_0 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_7_0".to_owned() });
+-    let bitwise_xor_7_1 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_7_1".to_owned() });
+-    let bitwise_xor_7_2 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_7_2".to_owned() });
+-    let bitwise_xor_7_0 = pack_preprocessed_column(bitwise_xor_7_0);
+-    let bitwise_xor_7_1 = pack_preprocessed_column(bitwise_xor_7_1);
+-    let bitwise_xor_7_2 = pack_preprocessed_column(bitwise_xor_7_2);
++    let bitwise_xor_7_0 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_7_0".to_owned() });
++    let bitwise_xor_7_1 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_7_1".to_owned() });
++    let bitwise_xor_7_2 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_7_2".to_owned() });
+ 
+     (trace.par_iter_mut(), lookup_data.par_iter_mut()).into_par_iter().enumerate().for_each(
+         |(row_index, (row, lookup_data))| {
+diff --git a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_8.rs b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_8.rs
+index 634fa2d..c635ab8 100644
+--- a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_8.rs
++++ b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_8.rs
+@@ -2,7 +2,6 @@
+ use crate::circuit_air::components::verify_bitwise_xor_8::{
+     Claim, InteractionClaim, LOG_SIZE, N_TRACE_COLUMNS,
+ };
+-
+ use crate::witness::components::prelude::*;
+ 
+ pub type InputType = [M31; 3];
+@@ -10,7 +9,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 2],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -40,15 +39,14 @@ impl ClaimGenerator {
+     }
+ 
+     pub fn add_input(&self, input: &InputType, relation_index: usize) {
+-        self.mults[relation_index]
+-            .increase_at((*self.input_to_row.get(input).unwrap()).try_into().unwrap());
++        self.mults[relation_index].increase_at(self.input_to_row.row(input).try_into().unwrap());
+     }
+ 
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+-            packed_input.unpack().into_iter().for_each(|input| {
+-                self.add_input(&input, relation_index);
+-            });
++            for row in self.input_to_row.rows_packed(packed_input) {
++                self.mults[relation_index].increase_at(row);
++            }
+         });
+     }
+ }
+@@ -71,15 +69,12 @@ fn write_trace_simd(
+ 
+     let relation_id = PackedM31::broadcast(M31::from(112558620));
+     let relation_id_b = PackedM31::broadcast(M31::from(521092554));
+-    let bitwise_xor_8_0 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_8_0".to_owned() });
+-    let bitwise_xor_8_1 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_8_1".to_owned() });
+-    let bitwise_xor_8_2 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_8_2".to_owned() });
+-    let bitwise_xor_8_0 = pack_preprocessed_column(bitwise_xor_8_0);
+-    let bitwise_xor_8_1 = pack_preprocessed_column(bitwise_xor_8_1);
+-    let bitwise_xor_8_2 = pack_preprocessed_column(bitwise_xor_8_2);
++    let bitwise_xor_8_0 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_8_0".to_owned() });
++    let bitwise_xor_8_1 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_8_1".to_owned() });
++    let bitwise_xor_8_2 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_8_2".to_owned() });
+ 
+     (trace.par_iter_mut(), lookup_data.par_iter_mut()).into_par_iter().enumerate().for_each(
+         |(row_index, (row, lookup_data))| {
+diff --git a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_9.rs b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_9.rs
+index 923be91..e2778d5 100644
+--- a/crates/circuit_prover/src/witness/components/verify_bitwise_xor_9.rs
++++ b/crates/circuit_prover/src/witness/components/verify_bitwise_xor_9.rs
+@@ -2,7 +2,6 @@
+ use crate::circuit_air::components::verify_bitwise_xor_9::{
+     Claim, InteractionClaim, LOG_SIZE, N_TRACE_COLUMNS,
+ };
+-
+ use crate::witness::components::prelude::*;
+ 
+ pub type InputType = [M31; 3];
+@@ -10,7 +9,7 @@ pub type PackedInputType = [PackedM31; 3];
+ 
+ pub struct ClaimGenerator {
+     pub mults: [AtomicMultiplicityColumn; 1],
+-    input_to_row: HashMap<[M31; 3], usize>,
++    input_to_row: InputToRow<3>,
+     preprocessed_trace: Arc<PreProcessedTrace>,
+ }
+ 
+@@ -41,15 +40,14 @@ impl ClaimGenerator {
+     }
+ 
+     pub fn add_input(&self, input: &InputType, relation_index: usize) {
+-        self.mults[relation_index]
+-            .increase_at((*self.input_to_row.get(input).unwrap()).try_into().unwrap());
++        self.mults[relation_index].increase_at(self.input_to_row.row(input).try_into().unwrap());
+     }
+ 
+     pub fn add_packed_inputs(&self, packed_inputs: &[PackedInputType], relation_index: usize) {
+         packed_inputs.into_par_iter().for_each(|packed_input| {
+-            packed_input.unpack().into_iter().for_each(|input| {
+-                self.add_input(&input, relation_index);
+-            });
++            for row in self.input_to_row.rows_packed(packed_input) {
++                self.mults[relation_index].increase_at(row);
++            }
+         });
+     }
+ }
+@@ -71,15 +69,12 @@ fn write_trace_simd(
+     };
+ 
+     let relation_id = PackedM31::broadcast(M31::from(95781001));
+-    let bitwise_xor_9_0 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_9_0".to_owned() });
+-    let bitwise_xor_9_1 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_9_1".to_owned() });
+-    let bitwise_xor_9_2 =
+-        preprocessed_trace.get_column(&PreProcessedColumnId { id: "bitwise_xor_9_2".to_owned() });
+-    let bitwise_xor_9_0 = pack_preprocessed_column(bitwise_xor_9_0);
+-    let bitwise_xor_9_1 = pack_preprocessed_column(bitwise_xor_9_1);
+-    let bitwise_xor_9_2 = pack_preprocessed_column(bitwise_xor_9_2);
++    let bitwise_xor_9_0 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_9_0".to_owned() });
++    let bitwise_xor_9_1 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_9_1".to_owned() });
++    let bitwise_xor_9_2 = preprocessed_trace
++        .get_packed_column(&PreProcessedColumnId { id: "bitwise_xor_9_2".to_owned() });
+ 
+     (trace.par_iter_mut(), lookup_data.par_iter_mut()).into_par_iter().enumerate().for_each(
+         |(row_index, (row, lookup_data))| {
+diff --git a/crates/circuit_prover/src/witness/trace.rs b/crates/circuit_prover/src/witness/trace.rs
+index 4112145..b6df6ed 100644
+--- a/crates/circuit_prover/src/witness/trace.rs
++++ b/crates/circuit_prover/src/witness/trace.rs
+@@ -371,6 +371,12 @@ where
+         let verify_bitwise_xor_7 = circuit_interaction_claim_generator.verify_bitwise_xor_7;
+         let verify_bitwise_xor_9 = circuit_interaction_claim_generator.verify_bitwise_xor_9;
+         let range_check_16 = circuit_interaction_claim_generator.range_check_16;
++        // The blake gate's interaction trace, the largest, is written before the others, so that
++        // its temporaries do not coexist with theirs.
++        let (trace, claim) =
++            blake_g_gate.write_interaction_trace(&interaction_elements.common_lookup_elements);
++        *blake_g_gate_polys = SimdBackend::interpolate_columns(trace, twiddles);
++        *blake_g_gate_claimed_sum = claim.claimed_sum;
+         scope(|s| {
+             s.spawn(|_| {
+                 let (trace, claimed_sum) = eq::write_interaction_trace(
+@@ -402,12 +408,6 @@ where
+                 *m_31_to_u_32_polys = SimdBackend::interpolate_columns(trace, twiddles);
+                 *m_31_to_u_32_claimed_sum = claim.claimed_sum;
+             });
+-            s.spawn(|_| {
+-                let (trace, claim) = blake_g_gate
+-                    .write_interaction_trace(&interaction_elements.common_lookup_elements);
+-                *blake_g_gate_polys = SimdBackend::interpolate_columns(trace, twiddles);
+-                *blake_g_gate_claimed_sum = claim.claimed_sum;
+-            });
+             s.spawn(|_| {
+                 let (trace, claim) = verify_bitwise_xor_8
+                     .write_interaction_trace(&interaction_elements.common_lookup_elements);
+diff --git a/crates/circuits/Cargo.toml b/crates/circuits/Cargo.toml
+index 990f8df..2bbf0f0 100644
+--- a/crates/circuits/Cargo.toml
++++ b/crates/circuits/Cargo.toml
+@@ -4,6 +4,7 @@ version.workspace = true
+ edition.workspace = true
+ 
+ [dependencies]
++rayon.workspace = true
+ blake2.workspace = true
+ hashbrown.workspace = true
+ indexmap.workspace = true
+diff --git a/crates/circuits/src/circuit.rs b/crates/circuits/src/circuit.rs
+index c612c78..fde4cee 100644
+--- a/crates/circuits/src/circuit.rs
++++ b/crates/circuits/src/circuit.rs
+@@ -447,28 +447,128 @@ impl Circuit {
+ 
+     /// Checks if the circuit is satisfied by the given values.
+     pub fn check(&self, values: &[QM31]) -> Result<(), String> {
+-        for gate in self.all_gates() {
+-            gate.check(values)?;
+-        }
++        use rayon::prelude::*;
++
++        // The gates are checked independently; a valid circuit passes either way, and for an
++        // invalid one some failing gate's error is returned.
++        let Circuit {
++            n_vars: _,
++            add,
++            sub,
++            mul,
++            pointwise_mul,
++            eq,
++            triple_xor,
++            m31_to_u32,
++            blake_g_gate,
++            permutation,
++            output,
++        } = self;
++        add.par_iter().try_for_each(|gate| gate.check(values))?;
++        sub.par_iter().try_for_each(|gate| gate.check(values))?;
++        mul.par_iter().try_for_each(|gate| gate.check(values))?;
++        pointwise_mul.par_iter().try_for_each(|gate| gate.check(values))?;
++        eq.par_iter().try_for_each(|gate| gate.check(values))?;
++        triple_xor.par_iter().try_for_each(|gate| gate.check(values))?;
++        m31_to_u32.par_iter().try_for_each(|gate| gate.check(values))?;
++        blake_g_gate.par_iter().try_for_each(|gate| gate.check(values))?;
++        permutation.par_iter().try_for_each(|gate| gate.check(values))?;
++        output.par_iter().try_for_each(|gate| gate.check(values))?;
+         Ok(())
+     }
+ 
+     /// Returns the number of uses and number of yields for each variable (in the context of lookup
+     /// terms).
+     pub fn compute_multiplicities(&self) -> (Vec<usize>, Vec<usize>) {
+-        let mut n_uses = vec![0; self.n_vars];
+-        let mut n_yields = vec![0; self.n_vars];
++        // The two histograms are independent; each pass reads the gate fields directly (the same
++        // variables as `Gate::uses` and `Gate::yields` return), which avoids two `Vec`
++        // allocations per gate.
++        rayon::join(|| self.count_uses(), || self.count_yields())
++    }
+ 
+-        for gate in self.all_gates() {
++    fn count_uses(&self) -> Vec<usize> {
++        let mut n_uses = vec![0; self.n_vars];
++        for Add { in0, in1, out: _ } in &self.add {
++            n_uses[*in0] += 1;
++            n_uses[*in1] += 1;
++        }
++        for Sub { in0, in1, out: _ } in &self.sub {
++            n_uses[*in0] += 1;
++            n_uses[*in1] += 1;
++        }
++        for Mul { in0, in1, out: _ } in &self.mul {
++            n_uses[*in0] += 1;
++            n_uses[*in1] += 1;
++        }
++        for PointwiseMul { in0, in1, out: _ } in &self.pointwise_mul {
++            n_uses[*in0] += 1;
++            n_uses[*in1] += 1;
++        }
++        for Eq { in0, in1 } in &self.eq {
++            n_uses[*in0] += 1;
++            n_uses[*in1] += 1;
++        }
++        for BlakeGGate { input_a, input_b, input_c, input_d, input_f0, input_f1, .. } in
++            &self.blake_g_gate
++        {
++            n_uses[*input_a] += 1;
++            n_uses[*input_b] += 1;
++            n_uses[*input_c] += 1;
++            n_uses[*input_d] += 1;
++            n_uses[*input_f0] += 1;
++            n_uses[*input_f1] += 1;
++        }
++        for TripleXor { input_a, input_b, input_c, out: _ } in &self.triple_xor {
++            n_uses[*input_a] += 1;
++            n_uses[*input_b] += 1;
++            n_uses[*input_c] += 1;
++        }
++        for M31ToU32 { input, out: _ } in &self.m31_to_u32 {
++            n_uses[*input] += 1;
++        }
++        for gate in &self.permutation {
+             for use_var in gate.uses() {
+                 n_uses[use_var] += 1;
+             }
++        }
++        for Output { in0 } in &self.output {
++            n_uses[*in0] += 1;
++        }
++        n_uses
++    }
++
++    fn count_yields(&self) -> Vec<usize> {
++        let mut n_yields = vec![0; self.n_vars];
++        for Add { out, .. } in &self.add {
++            n_yields[*out] += 1;
++        }
++        for Sub { out, .. } in &self.sub {
++            n_yields[*out] += 1;
++        }
++        for Mul { out, .. } in &self.mul {
++            n_yields[*out] += 1;
++        }
++        for PointwiseMul { out, .. } in &self.pointwise_mul {
++            n_yields[*out] += 1;
++        }
++        for BlakeGGate { out_a, out_b, out_c, out_d, .. } in &self.blake_g_gate {
++            n_yields[*out_a] += 1;
++            n_yields[*out_b] += 1;
++            n_yields[*out_c] += 1;
++            n_yields[*out_d] += 1;
++        }
++        for TripleXor { out, .. } in &self.triple_xor {
++            n_yields[*out] += 1;
++        }
++        for M31ToU32 { out, .. } in &self.m31_to_u32 {
++            n_yields[*out] += 1;
++        }
++        for gate in &self.permutation {
+             for yield_var in gate.yields() {
+                 n_yields[yield_var] += 1;
+             }
+         }
+-
+-        (n_uses, n_yields)
++        n_yields
+     }
+ 
+     /// Verifies that each variable appears exactly once as a yield.
+diff --git a/crates/circuits/src/context.rs b/crates/circuits/src/context.rs
+index fcc49a3..513f486 100644
+--- a/crates/circuits/src/context.rs
++++ b/crates/circuits/src/context.rs
+@@ -75,6 +75,9 @@ pub struct Context<Value: IValue> {
+     /// Debug only. If true, equality is asserted when adding the `eq` gate; if false, no
+     /// assertion is made during construction and equality can be checked later at validation.
+     pub assert_eq_on_eval: bool,
++    /// Set by [FinalizedContext::release_on_padding]: padding then hands the values to the proof
++    /// and frees the gates.
++    release_on_padding: bool,
+ }
+ 
+ impl<Value: IValue> Context<Value> {
+@@ -232,6 +235,7 @@ impl<Value: IValue> Default for Context<Value> {
+             guessed_vars: Some(vec![]),
+             reserved_vars: vec![],
+             assert_eq_on_eval: false,
++            release_on_padding: false,
+         };
+         // Register zero, one, and u as the first constants.
+         res.constant(QM31::zero());
+@@ -287,6 +291,33 @@ impl<Value: IValue> FinalizedContext<Value> {
+     pub fn get(&self, var: Var) -> Value {
+         self.context.get(var)
+     }
++
++    /// Marks this context as one whose padding is its last change before it is proved: padding
++    /// then hands the values over to the proof, which reads them only to write its base trace and
++    /// frees them right after, and frees the gates, which nothing reads once the circuit is padded
++    /// (the proof reads the preprocessed circuit). Afterwards [Self::values] is empty and
++    /// [Self::circuit] keeps only `n_vars`.
++    pub fn release_on_padding(&mut self) {
++        self.context.release_on_padding = true;
++    }
++
++    /// Clears [Self::release_on_padding], for a caller that reads the circuit after padding it.
++    pub fn keep_on_padding(&mut self) {
++        self.context.release_on_padding = false;
++    }
++
++    /// Called once the context is padded: releases it if [Self::release_on_padding] was set.
++    pub fn release_if_requested(&mut self) {
++        let context = &mut self.context;
++        if !std::mem::take(&mut context.release_on_padding) {
++            return;
++        }
++        Value::release_values(std::mem::take(&mut context.values));
++        context.circuit = Circuit { n_vars: context.circuit.n_vars, ..Circuit::default() };
++        context.constants = IndexMap::new();
++        context.unused_vars = HashSet::new();
++        context.maybe_unused_vars = HashSet::new();
++    }
+ }
+ 
+ impl FinalizedContext<QM31> {
+diff --git a/crates/circuits/src/ivalue.rs b/crates/circuits/src/ivalue.rs
+index 4b71c36..f68c050 100644
+--- a/crates/circuits/src/ivalue.rs
++++ b/crates/circuits/src/ivalue.rs
+@@ -1,7 +1,8 @@
+ use itertools::Itertools;
+ use num_traits::Zero;
++use stwo::core::fields::cm31::CM31;
++use stwo::core::fields::m31::M31;
+ use stwo::core::fields::qm31::QM31;
+-use stwo::core::fields::{cm31::CM31, m31::M31};
+ 
+ use crate::blake::{HashValue, blake_qm31};
+ 
+@@ -60,6 +61,22 @@ pub trait IValue:
+ 
+     /// Unpacks a QM31 limb representation `(low_u16, high_u16, 0, 0)` back into a `u32`.
+     fn unpack_u32(&self) -> u32;
++
++    /// Takes the values of a context released at padding (see
++    /// [`FinalizedContext::release_on_padding`](crate::context::FinalizedContext::release_on_padding)).
++    /// Only [QM31] values are proved; other values are dropped.
++    fn release_values(values: Vec<Self>) {
++        drop(values);
++    }
++}
++
++/// The values of the last context released at padding, waiting for its proof to take them (see
++/// [`take_released_values`]).
++static RELEASED_VALUES: std::sync::Mutex<Option<Vec<QM31>>> = std::sync::Mutex::new(None);
++
++/// Takes the values of the last context released at padding, if its proof has not taken them yet.
++pub fn take_released_values() -> Option<Vec<QM31>> {
++    RELEASED_VALUES.lock().unwrap().take()
+ }
+ 
+ impl IValue for QM31 {
+@@ -112,6 +129,10 @@ impl IValue for QM31 {
+         assert!(low <= 0xFFFF && high <= 0xFFFF, "low and high coordinates must be u16 values");
+         low | (high << 16)
+     }
++
++    fn release_values(values: Vec<Self>) {
++        *RELEASED_VALUES.lock().unwrap() = Some(values);
++    }
+ }
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
