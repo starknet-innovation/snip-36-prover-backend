@@ -303,8 +303,8 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         "Bank matched (block {match_block}), seed_block: {reference_block}"
     ));
 
-    // Record player balance before settle
-    let balance_before = get_strk_balance(&rpc, &config.account_address).await;
+    // Snapshot after deposits; only proof submission and settlement fees follow.
+    let balance_before = get_strk_balance(&rpc, &config.account_address).await?;
     info!(
         "  Player STRK balance before: {:.6}",
         balance_before as f64 / 1e18
@@ -552,16 +552,17 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         }
 
         info!("  Waiting for proof tx inclusion...");
-        match rpc.wait_for_tx(&tx_hash_hex, 600, 5).await {
+        let proof_receipt = match rpc.wait_for_tx(&tx_hash_hex, 600, 5).await {
             Ok(receipt) => {
                 let bn = receipt_block_number(&receipt).unwrap_or(0);
                 pass(&format!("Proof tx included in block {bn}"));
+                receipt
             }
             Err(e) => {
                 fail(&format!("Proof tx not confirmed: {e}"));
                 bail!("proof tx failed");
             }
-        }
+        };
 
         // ==========================================
         // STEP 9: Settle
@@ -569,7 +570,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
         step(9, "Settle on-chain");
 
         let settle_calldata = format!("{} {}", session_felt, seed);
-        sncast_invoke(
+        let settle_tx = sncast_invoke(
             &rpc,
             account_name,
             &config.rpc_url,
@@ -578,37 +579,34 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
             &settle_calldata,
         )
         .await?;
-        pass("Settlement tx confirmed");
+        let settle_receipt = rpc.get_receipt(&settle_tx).await?;
+        pass(&format!("Settlement tx confirmed: {settle_tx}"));
 
         // ==========================================
         // STEP 10: Verify balances
         // ==========================================
         step(10, "Verify settlement");
 
-        let balance_after = get_strk_balance(&rpc, &config.account_address).await;
+        let balance_after = get_strk_balance(&rpc, &config.account_address).await?;
         info!(
             "  Player STRK balance after:  {:.6}",
             balance_after as f64 / 1e18
         );
 
-        let diff = balance_after.saturating_sub(balance_before);
-        let diff_strk = diff as f64 / 1e18;
-
-        if expected_won {
-            // Player should have gained ~bet_amount (minus gas)
-            if diff > 0 {
-                pass(&format!(
-                    "Player balance increased by {:.6} STRK (won)",
-                    diff_strk
-                ));
-            } else {
-                fail(&format!(
-                    "Player balance did NOT increase (expected win, diff={diff_strk})"
-                ));
-            }
-        } else {
-            // Player lost — balance should have decreased (deposit was taken)
-            pass(&format!("Player lost, balance diff: {:.6} STRK", diff_strk));
+        let fees = receipt_fee_strk(&proof_receipt)?
+            .checked_add(receipt_fee_strk(&settle_receipt)?)
+            .ok_or_else(|| eyre::eyre!("transaction fee sum overflows u128"))?;
+        // This demo uses the same wallet for player and bank owner. The wallet
+        // receives 2x the bet on either outcome; both deposits precede the snapshot.
+        let payout = bet_amount_wei
+            .checked_mul(2)
+            .ok_or_else(|| eyre::eyre!("expected payout overflows u128"))?;
+        info!("  Proof and settlement fees: {fees} wei STRK");
+        match verify_settlement_balance(balance_before, balance_after, fees, payout) {
+            Ok(()) => pass(&format!(
+                "Payout verified after accounting for gas: {payout} wei STRK"
+            )),
+            Err(e) => fail(&format!("Settlement balance mismatch: {e}")),
         }
     }
 
@@ -789,15 +787,99 @@ async fn sncast_invoke(
     Ok(tx_hash)
 }
 
-async fn get_strk_balance(rpc: &StarknetRpc, address: &str) -> u128 {
-    match rpc
+/// INVOKE v3 fees are denominated in STRK (FRI), just like the balance.
+fn receipt_fee_strk(receipt: &serde_json::Value) -> Result<u128> {
+    let fee = &receipt["actual_fee"];
+    if fee["unit"].as_str() != Some("FRI") {
+        bail!("receipt actual_fee must be denominated in FRI");
+    }
+    parse_hex_u128(fee["amount"].as_str(), "receipt actual_fee.amount")
+}
+
+fn parse_hex_u128(value: Option<&str>, field: &str) -> Result<u128> {
+    let hex = value
+        .and_then(|v| v.strip_prefix("0x"))
+        .ok_or_else(|| eyre::eyre!("{field} must be a hex string"))?;
+    u128::from_str_radix(hex, 16).wrap_err_with(|| format!("invalid {field}"))
+}
+
+fn verify_settlement_balance(before: u128, after: u128, fees: u128, payout: u128) -> Result<()> {
+    let adjusted_after = after
+        .checked_add(fees)
+        .ok_or_else(|| eyre::eyre!("fee-adjusted balance overflows u128"))?;
+    let expected = before
+        .checked_add(payout)
+        .ok_or_else(|| eyre::eyre!("expected balance overflows u128"))?;
+    if adjusted_after != expected {
+        bail!("before={before}, after={after}, fees={fees}, expected payout={payout} (wei STRK)");
+    }
+    Ok(())
+}
+
+async fn get_strk_balance(rpc: &StarknetRpc, address: &str) -> Result<u128> {
+    let result = rpc
         .starknet_call(STRK_TOKEN, BALANCE_OF_SELECTOR, &[address])
         .await
-    {
-        Ok(result) => {
-            let low = result.first().map(|s| s.as_str()).unwrap_or("0x0");
-            u128::from_str_radix(low.trim_start_matches("0x"), 16).unwrap_or(0)
+        .wrap_err("failed to read STRK balance")?;
+    if result.len() != 2 {
+        bail!("STRK balance must contain low and high limbs");
+    }
+    if parse_hex_u128(result.get(1).map(String::as_str), "STRK balance high limb")? != 0 {
+        bail!("STRK balance exceeds u128");
+    }
+    parse_hex_u128(result.first().map(String::as_str), "STRK balance low limb")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn payout_is_verified_even_when_gas_exceeds_it() {
+        // The live Sepolia failure: a 0.002 STRK payout with ~1.976 STRK fees.
+        let before = 2_713_282_035_000_000_000_000;
+        let fees = 1_976_319_273_671_979_892;
+        let payout = 2_000_000_000_000_000;
+        let after = before + payout - fees;
+        assert!(after < before);
+        verify_settlement_balance(before, after, fees, payout).unwrap();
+    }
+
+    #[test]
+    fn payout_is_verified_when_gas_is_smaller_or_zero() {
+        verify_settlement_balance(100, 115, 5, 20).unwrap();
+        verify_settlement_balance(100, 120, 0, 20).unwrap();
+    }
+
+    #[test]
+    fn missing_partial_and_excess_payouts_fail() {
+        for after in [70, 80, 100] {
+            assert!(verify_settlement_balance(100, after, 30, 20).is_err());
         }
-        Err(_) => 0,
+        verify_settlement_balance(100, 90, 30, 20).unwrap();
+    }
+
+    #[test]
+    fn balance_arithmetic_fails_on_overflow() {
+        assert!(verify_settlement_balance(0, u128::MAX, 1, 0).is_err());
+        assert!(verify_settlement_balance(u128::MAX, 0, 0, 1).is_err());
+    }
+
+    #[test]
+    fn fees_require_valid_strk_receipt_amounts() {
+        assert_eq!(
+            receipt_fee_strk(&json!({"actual_fee":{"amount":"0x2a","unit":"FRI"}})).unwrap(),
+            42
+        );
+        for receipt in [
+            json!({}),
+            json!({"actual_fee":{"unit":"FRI"}}),
+            json!({"actual_fee":{"amount":"0x2a","unit":"WEI"}}),
+            json!({"actual_fee":{"amount":"garbage","unit":"FRI"}}),
+            json!({"actual_fee":{"amount":"0x100000000000000000000000000000000","unit":"FRI"}}),
+        ] {
+            assert!(receipt_fee_strk(&receipt).is_err());
+        }
     }
 }

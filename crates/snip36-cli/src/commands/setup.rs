@@ -26,12 +26,90 @@ pub const EXPECTED_DEPS_TAG: &str = env!("SNIP36_EXPECTED_DEPS_TAG");
 
 const PROVING_UTILS_LOCKFILE: &[u8] = include_bytes!("../../../../vendor/proving-utils.Cargo.lock");
 
+/// The low-memory prover: the provably.fast memory frontier (starknet-innovation/proving
+/// 77964886) backported onto the stwo stack SEQUENCER_TAG pins. It changes how the prover
+/// schedules and frees memory, not what it proves: proofs are byte-identical to the unpatched
+/// stack's, at roughly a sixth of the peak memory. See vendor/low-memory-prover/README.md.
+///
+/// (repo, clone URL, the commit the sequencer's Cargo.lock pins, patch, [patch] entries: package
+/// name and its path inside the repo).
+type LowMemoryRepo = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+const LOW_MEMORY_PROVER: &[LowMemoryRepo] = &[
+    (
+        "stwo",
+        "https://github.com/starkware-libs/stwo",
+        "489a0f3ee44a59e03944ad9aa4f3e5a91a3d3f08",
+        include_str!("../../../../vendor/low-memory-prover/stwo.patch"),
+        &[
+            ("stwo", "crates/stwo"),
+            ("stwo-constraint-framework", "crates/constraint-framework"),
+            ("stwo-air-utils", "crates/air-utils"),
+            ("stwo-air-utils-derive", "crates/air-utils-derive"),
+        ],
+    ),
+    (
+        "stwo-cairo",
+        "https://github.com/starkware-libs/stwo-cairo",
+        "9b6be2710e4d7124bc93fe80a5af36556d42ed29",
+        include_str!("../../../../vendor/low-memory-prover/stwo-cairo.patch"),
+        &[
+            ("cairo-air", "stwo_cairo_prover/crates/cairo-air"),
+            ("stwo-cairo-adapter", "stwo_cairo_prover/crates/adapter"),
+            ("stwo-cairo-prover", "stwo_cairo_prover/crates/prover"),
+            (
+                "stwo-cairo-serialize",
+                "stwo_cairo_prover/crates/cairo-serialize",
+            ),
+            (
+                "stwo-cairo-serialize-derive",
+                "stwo_cairo_prover/crates/cairo-serialize-derive",
+            ),
+            ("stwo-cairo-common", "stwo_cairo_prover/crates/common"),
+        ],
+    ),
+    (
+        "stwo-circuits",
+        "https://github.com/starkware-libs/stwo-circuits",
+        "5ef951a12727e3489a2ee991c580a5b925c59c69",
+        include_str!("../../../../vendor/low-memory-prover/stwo-circuits.patch"),
+        &[
+            ("circuits", "crates/circuits"),
+            ("circuit-common", "crates/circuit_common"),
+            ("circuit-prover", "crates/circuit_prover"),
+            ("circuit-serialize", "crates/circuit_serialize"),
+            ("circuit-verifier", "crates/circuit_verifier"),
+            ("circuit-cairo-verifier", "crates/cairo_verifier"),
+            ("circuits-stark-verifier", "crates/stark_verifier"),
+        ],
+    ),
+    (
+        "proving-utils",
+        "https://github.com/starkware-libs/proving-utils",
+        "3035dd00421daa541894297bd754db6e2787807b",
+        include_str!("../../../../vendor/low-memory-prover/proving-utils.patch"),
+        &[
+            ("privacy-prove", "crates/privacy_prove"),
+            ("privacy-circuit-verify", "crates/privacy_circuit_verify"),
+            (
+                "cairo-program-runner-lib",
+                "crates/cairo-program-runner-lib",
+            ),
+        ],
+    ),
+];
+
 #[derive(Args)]
 pub struct SetupArgs {
     /// Download prebuilt deps from the pinned GitHub release instead of
     /// building from source (~30s instead of ~30min; supported on
     /// darwin-arm64, linux-x86_64, linux-arm64)
-    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner"])]
+    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner", "stock_prover"])]
     prebuilt: bool,
 
     /// Skip building stwo-run-and-prove
@@ -41,6 +119,11 @@ pub struct SetupArgs {
     /// Skip building starknet_transaction_prover
     #[arg(long)]
     skip_runner: bool,
+
+    /// Build starknet_transaction_prover on the unpatched upstream prover instead of the
+    /// low-memory one (vendor/low-memory-prover). Proofs are the same either way.
+    #[arg(long)]
+    stock_prover: bool,
 }
 
 pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -154,6 +237,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
 
     // Apply macOS RLIMIT_AS patch
     apply_macos_patch(&sequencer_dir).await?;
+    apply_low_memory_prover(deps_dir, &sequencer_dir, args.stock_prover).await?;
     info!("");
 
     // [4/8] Python venv
@@ -876,6 +960,68 @@ fn extract_channel(toml_content: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Point the sequencer's prover dependencies at patched checkouts of the pinned stwo stack (see
+/// [`LOW_MEMORY_PROVER`]), or restore the upstream ones when `stock` is set.
+async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: bool) -> Result<()> {
+    // Start from the tag's manifest so re-runs and pin bumps never stack sections.
+    run_cmd_in(
+        "git",
+        &["checkout", "--quiet", "--", "Cargo.toml"],
+        sequencer_dir,
+    )
+    .await?;
+    if stock {
+        info!("  Low-memory prover: skipped (--stock-prover)");
+        return Ok(());
+    }
+
+    // The patches are made for exact commits; refuse a sequencer that pins others.
+    let lock = tokio::fs::read_to_string(sequencer_dir.join("Cargo.lock")).await?;
+    for (name, _, rev, _, _) in LOW_MEMORY_PROVER {
+        if !lock.contains(&format!("#{rev}")) {
+            bail!(
+                "the sequencer at {SEQUENCER_TAG} no longer pins {name} {rev}, which \
+                 vendor/low-memory-prover/{name}.patch was made for. Regenerate the patches for \
+                 the new pins (vendor/low-memory-prover/README.md), or run setup with --stock-prover."
+            );
+        }
+    }
+
+    info!("  Applying the low-memory prover patches...");
+    let root = deps_dir.join("low-memory-prover");
+    tokio::fs::create_dir_all(&root).await?;
+    let mut section = String::from(
+        "\n# snip36: low-memory prover (vendor/low-memory-prover), written by `snip36 setup`.\n",
+    );
+    for (name, url, rev, patch, crates) in LOW_MEMORY_PROVER {
+        let dir = root.join(name);
+        ensure_repo(&dir, &format!("{url}.git")).await?;
+        run_cmd_in("git", &["fetch", "--quiet", "origin", rev], &dir).await?;
+        // A clean tree at the pinned commit, then the patch: idempotent across re-runs.
+        run_cmd_in("git", &["reset", "--quiet", "--hard", rev], &dir).await?;
+        run_cmd_in("git", &["clean", "--quiet", "-fd"], &dir).await?;
+        let patch_file = root.join(format!("{name}.patch"));
+        tokio::fs::write(&patch_file, patch).await?;
+        run_cmd_in("git", &["apply", &patch_file.to_string_lossy()], &dir)
+            .await
+            .wrap_err_with(|| format!("vendor/low-memory-prover/{name}.patch does not apply"))?;
+        section.push_str(&format!("[patch.\"{url}\"]\n"));
+        for (package, path) in *crates {
+            section.push_str(&format!(
+                "{package} = {{ path = {:?} }}\n",
+                dir.join(path).to_string_lossy()
+            ));
+        }
+        info!("    {name} @ {}: patched", &rev[..8]);
+    }
+
+    let manifest = sequencer_dir.join("Cargo.toml");
+    let mut content = tokio::fs::read_to_string(&manifest).await?;
+    content.push_str(&section);
+    tokio::fs::write(&manifest, content).await?;
+    Ok(())
 }
 
 async fn apply_macos_patch(sequencer_dir: &Path) -> Result<()> {

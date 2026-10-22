@@ -120,7 +120,7 @@ jobs:
             target
             deps/proving-utils/target
             deps/sequencer/target
-          key: ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ hashFiles('Cargo.lock', 'vendor/proving-utils.Cargo.lock', 'crates/snip36-cli/src/commands/setup.rs') }}
+          key: ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ hashFiles('Cargo.lock', 'vendor/proving-utils.Cargo.lock', 'vendor/low-memory-prover/*.patch', 'crates/snip36-cli/src/commands/setup.rs') }}
           restore-keys: |
             ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-
             ${{ runner.os }}-deps-target-${{ matrix.target }}-${{ env.STWO_NIGHTLY }}-
@@ -338,6 +338,7 @@ jobs:
             - sequencer: `${{ env.SEQUENCER_TAG }}`
             - proving-utils: `${{ env.PROVING_UTILS_REV }}`
             - Rust nightly: `${{ env.STWO_NIGHTLY }}`
+            - low-memory prover: `${{ hashFiles('vendor/low-memory-prover/*.patch') }}` (vendor/low-memory-prover, applied by `snip36 setup`)
 
             **Usage:**
             ```bash
