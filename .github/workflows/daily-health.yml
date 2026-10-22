@@ -35,10 +35,10 @@ concurrency:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: e6b6fd2e9932909107833579e5b6efd6c75fa0af
+  SEQUENCER_TAG: 0ee373ac5f50d475ab0efd59edbda4a9215c12cf
   PROVING_UTILS_REV: 0a97f45a15809e7b5a821b7adc49212af7b399f1
   STWO_NIGHTLY: nightly-2026-01-15
-  EXPECTED_VIRTUAL_OS_PROGRAM_HASH: '0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1'
+  EXPECTED_VIRTUAL_OS_PROGRAM_HASH: '0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324'
   SCARB_VERSION: 2.15.0
   STARKNET_FOUNDRY_VERSION: 0.60.0
   # The prebuilt deps release tag is read from the deps-version file at the
