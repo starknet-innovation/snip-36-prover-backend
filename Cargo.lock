@@ -2260,7 +2260,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "snip36-cli"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -2287,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-coinflip"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-core"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "base64 0.23.1",
  "dotenvy",
@@ -2333,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-counter"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2358,7 +2358,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-messages"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-playground"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "axum",
  "color-eyre",
@@ -2391,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "snip36-server"
-version = "1.2.5"
+version = "1.3.0"
 dependencies = [
  "axum",
  "color-eyre",
