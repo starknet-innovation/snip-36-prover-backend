@@ -121,7 +121,7 @@ if [ -f deps/sequencer/target/release/starknet_os_runner ] && [ ! -f deps/sequen
 fi
 
 # Move starknet-sierra-compile to the project-local CARGO_TOOLS_ROOT layout
-# expected by sequencer v0.14.3 at runtime. deps-v5+ tarballs ship this as a
+# expected by sequencer v0.14.4 at runtime. deps-v5+ tarballs ship this as a
 # versioned compiler-tools/ tree. Keep the older shared_executables handling as
 # a compatibility path for explicitly requested older tags.
 if [ -d deps/bin/compiler-tools ]; then
@@ -177,7 +177,7 @@ else
   echo "WARNING: sequencer repo not cloned — cairo-compile not installed."
   echo "You may need to clone the sequencer for the Python venv:"
   echo "  git clone https://github.com/starkware-libs/sequencer.git deps/sequencer"
-  echo "  git -C deps/sequencer checkout e6b6fd2e9932909107833579e5b6efd6c75fa0af"
+  echo "  git -C deps/sequencer checkout 0ee373ac5f50d475ab0efd59edbda4a9215c12cf"
   echo "  sequencer_venv/bin/pip install -r deps/sequencer/scripts/requirements.txt"
 fi
 
