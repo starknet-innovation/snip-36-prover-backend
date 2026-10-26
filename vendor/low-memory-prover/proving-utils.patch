@@ -44,19 +44,20 @@ index 33445c3..366b0b1 100644
 -pub const CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS: bool = true;
 +pub const CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS: bool = false;
 diff --git a/crates/privacy_prove/src/lib.rs b/crates/privacy_prove/src/lib.rs
-index d2c3ac5..9f4f597 100644
+index d2c3ac5..33b0995 100644
 --- a/crates/privacy_prove/src/lib.rs
 +++ b/crates/privacy_prove/src/lib.rs
-@@ -18,7 +18,7 @@ use circuit_cairo_verifier::verify::CairoVerifierConfig;
+@@ -18,15 +18,15 @@ use circuit_cairo_verifier::verify::CairoVerifierConfig;
  use circuit_cairo_verifier::verify::build_fixed_cairo_circuit;
  use circuit_cairo_verifier::verify::prepare_cairo_proof_for_circuit_verifier;
  use circuit_common::finalize::{add_zk_blinding, finalize_context};
 -use circuit_common::preprocessed::PreprocessedCircuit;
 +use circuit_common::preprocessed::{PreprocessedCircuit, PreprocessedColumnSource};
  use circuit_prover::prover::{
-     prepare_circuit_proof_for_circuit_verifier, prove_circuit_with_precompute,
+-    prepare_circuit_proof_for_circuit_verifier, prove_circuit_with_precompute,
++    prepare_circuit_proof_for_circuit_verifier, prove_circuit_with_precompute_owned,
  };
-@@ -26,7 +26,7 @@ use circuit_serialize::serialize::CircuitSerialize;
+ use circuit_serialize::serialize::CircuitSerialize;
  use circuit_verifier::verify::CircuitConfig;
  use circuits_stark_verifier::proof::ProofConfig;
  use itertools::chain;
@@ -65,17 +66,17 @@ index d2c3ac5..9f4f597 100644
  use privacy_circuit_verify::{
      PrivacyProofOutput, Version, compute_privacy_bootloader_output, get_cairo_preprocessed_circuit,
      get_cairo_proof_config, get_cairo_verifier_config, get_privacy_bootloader_program,
-@@ -38,6 +38,9 @@ use stwo::core::poly::circle::CanonicCoset;
- use stwo::core::utils::MaybeOwned;
+@@ -39,14 +39,16 @@ use stwo::core::utils::MaybeOwned;
  use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
  use stwo::prover::CommitmentTreeProver;
+ use stwo::prover::backend::simd::SimdBackend;
 +#[cfg(unix)]
 +use stwo::prover::backend::simd::column::LargeBlockCache;
-+use stwo::prover::vcs_lifted::prover::MerkleProverLifted;
- use stwo::prover::backend::simd::SimdBackend;
  use stwo::prover::mempool::BaseColumnPool;
  use stwo::prover::poly::circle::PolyOps;
-@@ -46,7 +49,6 @@ use stwo_cairo_adapter::ProverInput;
+ use stwo::prover::poly::twiddles::TwiddleTree;
++use stwo::prover::vcs_lifted::prover::MerkleProverLifted;
+ use stwo_cairo_adapter::ProverInput;
  use stwo_cairo_adapter::adapter::adapt;
  use stwo_cairo_common::preprocessed_columns::preprocessed_trace::PreProcessedTrace;
  use stwo_cairo_prover::prover::{prove_cairo, prove_cairo_with_precompute};
@@ -83,7 +84,7 @@ index d2c3ac5..9f4f597 100644
  use tempfile::NamedTempFile;
  use tracing::{Level, info, span};
  
-@@ -54,18 +56,78 @@ use crate::consts::{
+@@ -54,18 +56,83 @@ use crate::consts::{
      CAIRO_PROVER_PARAMS, CAIRO_RUN_CONFIG, CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS,
  };
  
@@ -132,7 +133,12 @@ index d2c3ac5..9f4f597 100644
 +
 +    fn deref(&self) -> &PrecomputedTree {
 +        self.tree.get_or_init(|| {
-+            let build = self.build.lock().unwrap().take().expect("the tree is built once");
++            let build = self
++                .build
++                .lock()
++                .unwrap()
++                .take()
++                .expect("the tree is built once");
 +            build()
 +        })
 +    }
@@ -166,7 +172,7 @@ index d2c3ac5..9f4f597 100644
  fn compress_proof(proof_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
      Ok(zstd::encode_all(proof_bytes, 3)?)
  }
-@@ -122,11 +184,9 @@ pub fn prepare_recursive_prover_precomputes()
+@@ -122,11 +189,9 @@ pub fn prepare_recursive_prover_precomputes()
      let _span = span!(Level::INFO, "prepare_privacy_recursiveprover_precomputes").entered();
  
      let cairo_verifier_config = get_cairo_verifier_config()?;
@@ -178,7 +184,7 @@ index d2c3ac5..9f4f597 100644
      let base_column_pool = BaseColumnPool::<SimdBackend>::new();
      let cairo_lifting_log_size = CAIRO_PROVER_PARAMS
          .pcs_config
-@@ -135,47 +195,68 @@ pub fn prepare_recursive_prover_precomputes()
+@@ -135,47 +200,68 @@ pub fn prepare_recursive_prover_precomputes()
      let circuit_lifting_log_size = CIRCUIT_PCS_CONFIG
          .lifting_log_size
          .ok_or("Lifting log size is not set in Circuit's PcsConfig")?;
@@ -284,7 +290,7 @@ index d2c3ac5..9f4f597 100644
  
      Ok(Arc::new(RecursiveProverPrecomputes {
          base_column_pool,
-@@ -220,38 +301,63 @@ pub fn privacy_recursive_prove(
+@@ -220,36 +306,50 @@ pub fn privacy_recursive_prove(
          &precomputes.cairo_verifier_config.proof_config,
          &component_enable_bits,
      );
@@ -331,35 +337,17 @@ index d2c3ac5..9f4f597 100644
  
      info!("Prove the cairo-circuit verifier");
 -    let circuit_proof = prove_circuit_with_precompute(
--        &precomputes.base_column_pool,
--        &precomputes.twiddles,
--        &precomputes.preprocessed_circuit,
++    // Keep the assignment owned by this proof while dropping the rest of the padded context.
++    // The circuit prover frees the assignment as soon as its base trace has been written.
++    let values = context.into_values();
++    let circuit_proof = prove_circuit_with_precompute_owned(
+         &precomputes.base_column_pool,
+         &precomputes.twiddles,
+         &precomputes.preprocessed_circuit,
 -        MaybeOwned::Borrowed(&precomputes.circuit_preprocessed_tree),
 -        context_values,
--        precomputes.circuit_config.config,
--    )?;
-+    // A context that handed its values over at padding is not read again: the circuit proof takes
-+    // the released values, so free the rest of it first.
-+    let circuit_proof = if context.values().is_empty() {
-+        drop(context);
-+        prove_circuit_with_precompute(
-+            &precomputes.base_column_pool,
-+            &precomputes.twiddles,
-+            &precomputes.preprocessed_circuit,
-+            MaybeOwned::Borrowed(&*precomputes.circuit_preprocessed_tree),
-+            &[],
-+            precomputes.circuit_config.config,
-+        )?
-+    } else {
-+        prove_circuit_with_precompute(
-+            &precomputes.base_column_pool,
-+            &precomputes.twiddles,
-+            &precomputes.preprocessed_circuit,
-+            MaybeOwned::Borrowed(&*precomputes.circuit_preprocessed_tree),
-+            context.values(),
-+            precomputes.circuit_config.config,
-+        )?
-+    };
++        MaybeOwned::Borrowed(&*precomputes.circuit_preprocessed_tree),
++        values,
+         precomputes.circuit_config.config,
+     )?;
  
-     info!("Prepare the circuit proof for the circuit verifier");
-     let (proof_qm31s, _public_data) =

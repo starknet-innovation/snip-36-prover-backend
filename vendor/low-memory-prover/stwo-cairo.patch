@@ -612,23 +612,17 @@ index 680e3ff5..3a5bb893 100644
                      *a.entry(k).or_insert(0) += v;
                  }
 diff --git a/stwo_cairo_prover/crates/prover/src/witness/prelude.rs b/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
-index 6ffe0a91..20805dc8 100644
+index 6ffe0a91..6e43f5e6 100644
 --- a/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
 +++ b/stwo_cairo_prover/crates/prover/src/witness/prelude.rs
-@@ -1,5 +1,4 @@
- pub use std::array::from_fn;
--pub use std::collections::HashMap;
- pub use std::iter::zip;
- pub use std::simd::Simd;
- pub use std::sync::atomic::{AtomicU32, Ordering};
-@@ -47,4 +46,4 @@ pub use crate::witness::fast_deduction::poseidon::{
+@@ -47,4 +47,4 @@ pub use crate::witness::fast_deduction::poseidon::{
      PackedCube252, PackedPoseidon3PartialRoundsChain, PackedPoseidonFullRoundChain,
      PackedPoseidonRoundKeys,
  };
 -pub use crate::witness::utils::*;
-+pub use crate::witness::utils::{HashMap, InputToRow, *};
++pub use crate::witness::utils::{InputToRow, *};
 diff --git a/stwo_cairo_prover/crates/prover/src/witness/utils.rs b/stwo_cairo_prover/crates/prover/src/witness/utils.rs
-index 496b0c30..6c7de052 100644
+index 496b0c30..997c0bfc 100644
 --- a/stwo_cairo_prover/crates/prover/src/witness/utils.rs
 +++ b/stwo_cairo_prover/crates/prover/src/witness/utils.rs
 @@ -1,4 +1,3 @@
@@ -645,53 +639,10 @@ index 496b0c30..6c7de052 100644
  use stwo::prover::backend::{Backend, BackendForChannel};
  use stwo::prover::poly::circle::CircleEvaluation;
  use stwo::prover::poly::BitReversedOrder;
-@@ -22,6 +21,127 @@ use stwo_constraint_framework::PREPROCESSED_TRACE_IDX;
+@@ -22,6 +21,96 @@ use stwo_constraint_framework::PREPROCESSED_TRACE_IDX;
  
  use crate::witness::preprocessed_trace::generate_preprocessed_commitment_root;
  
-+/// A fast, deterministic hasher for the witness' lookup maps: their keys are small arrays of
-+/// field elements, and SipHash dominates both the construction of the maps and the lookups.
-+/// Iteration order is never relied on (the default hasher is randomized), so the choice of
-+/// hasher cannot change the trace.
-+#[derive(Default, Clone, Copy)]
-+pub struct FastHasher(u64);
-+
-+impl std::hash::Hasher for FastHasher {
-+    #[inline]
-+    fn finish(&self) -> u64 {
-+        self.0
-+    }
-+
-+    #[inline]
-+    fn write(&mut self, bytes: &[u8]) {
-+        for chunk in bytes.chunks(8) {
-+            let mut word = [0u8; 8];
-+            word[..chunk.len()].copy_from_slice(chunk);
-+            self.write_u64(u64::from_le_bytes(word));
-+        }
-+    }
-+
-+    #[inline]
-+    fn write_u32(&mut self, i: u32) {
-+        self.write_u64(i as u64);
-+    }
-+
-+    #[inline]
-+    fn write_u64(&mut self, i: u64) {
-+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
-+    }
-+
-+    #[inline]
-+    fn write_usize(&mut self, i: usize) {
-+        self.write_u64(i as u64);
-+    }
-+}
-+
-+pub type FastHasherBuilder = std::hash::BuildHasherDefault<FastHasher>;
-+
-+/// [`std::collections::HashMap`] with [`FastHasher`].
-+pub type HashMap<K, V> = std::collections::HashMap<K, V, FastHasherBuilder>;
-+
 +/// The row of a const-size component's preprocessed table for an input tuple.
 +///
 +/// When the key columns are bit fields of the row index that cover all its bits (the range-check
@@ -699,9 +650,10 @@ index 496b0c30..6c7de052 100644
 +/// which is checked over every row when the table is built), the row is the sum of the shifted
 +/// key values; otherwise it is looked up in a map.
 +pub struct InputToRow<const N: usize> {
-+    /// `(key index, shift)` of the bit fields; empty when the map is used.
-+    fields: Vec<(usize, u32)>,
-+    map: HashMap<[M31; N], usize>,
++    /// `(key index, shift, maximum value)` of the bit fields; empty when the map is used.
++    fields: Vec<(usize, u32, u64)>,
++    n_rows: usize,
++    map: std::collections::HashMap<[M31; N], usize>,
 +}
 +
 +impl<const N: usize> InputToRow<N> {
@@ -709,7 +661,7 @@ index 496b0c30..6c7de052 100644
 +    pub fn new(n_rows: usize, at: impl Fn(usize, usize) -> u64) -> Self {
 +        let log_size = n_rows.ilog2();
 +        assert_eq!(1 << log_size, n_rows);
-+        let mut fields: Vec<(usize, u32)> = Vec::new();
++        let mut fields: Vec<(usize, u32, u64)> = Vec::new();
 +        let mut covered: u64 = 0;
 +        for i in 0..N {
 +            // The values at the rows 1, 2, 4, ... say which bits a bit-field column would hold.
@@ -736,22 +688,23 @@ index 496b0c30..6c7de052 100644
 +                continue;
 +            }
 +            covered |= field_mask;
-+            fields.push((i, shift as u32));
++            fields.push((i, shift as u32, low_mask));
 +        }
 +        if covered == (1u64 << log_size) - 1 {
 +            return Self {
 +                fields,
-+                map: HashMap::default(),
++                n_rows,
++                map: std::collections::HashMap::new(),
 +            };
 +        }
-+        let mut map: HashMap<[M31; N], usize> =
-+            HashMap::with_capacity_and_hasher(n_rows, Default::default());
++        let mut map = std::collections::HashMap::with_capacity(n_rows);
 +        for r in 0..n_rows {
 +            let key: [M31; N] = std::array::from_fn(|i| M31::from(at(i, r) as u32));
 +            map.insert(key, r);
 +        }
 +        Self {
 +            fields: Vec::new(),
++            n_rows,
 +            map,
 +        }
 +    }
@@ -762,10 +715,20 @@ index 496b0c30..6c7de052 100644
 +        if self.fields.is_empty() {
 +            *self.map.get(input).unwrap()
 +        } else {
-+            self.fields
++            let row = self
++                .fields
 +                .iter()
-+                .map(|&(i, shift)| (input[i].0 as usize) << shift)
-+                .sum()
++                .map(|&(i, shift, maximum)| {
++                    let value = input[i].0 as u64;
++                    assert!(
++                        value <= maximum,
++                        "lookup value exceeds its table field width"
++                    );
++                    (value as usize) << shift
++                })
++                .sum();
++            assert!(row < self.n_rows, "lookup row exceeds table bounds");
++            row
 +        }
 +    }
 +}
@@ -773,7 +736,7 @@ index 496b0c30..6c7de052 100644
  pub fn pack_values<T: Pack>(values: &[T]) -> Vec<T::SimdType> {
      values
          .as_chunks::<N_LANES>()
-@@ -208,9 +328,7 @@ pub fn export_circuit_cairo_verifier_preprocessed_roots() {
+@@ -208,9 +297,7 @@ pub fn export_circuit_cairo_verifier_preprocessed_roots() {
  pub fn make_input_to_row<const N: usize>(
      preprocessed_trace: &PreProcessedTrace,
      column_ids: [PreProcessedColumnId; N],
@@ -784,7 +747,7 @@ index 496b0c30..6c7de052 100644
      let columns = column_ids
          .iter()
          .map(|id| preprocessed_trace.get_column(id))
-@@ -220,24 +338,9 @@ pub fn make_input_to_row<const N: usize>(
+@@ -220,24 +307,9 @@ pub fn make_input_to_row<const N: usize>(
          columns.iter().all(|c| c.log_size() == log_size),
          "input_to_row columns of different sizes"
      );
@@ -812,3 +775,34 @@ index 496b0c30..6c7de052 100644
  }
  
  #[cfg(test)]
+@@ -249,9 +321,29 @@ mod tests {
+     use stwo::core::pcs::TreeVec;
+     use stwo::prover::backend::simd::m31::N_LANES;
+ 
+-    use super::Enabler;
++    use super::{Enabler, InputToRow};
+     use crate::witness::utils::tree_trace_cells;
+ 
++    #[test]
++    fn bit_field_lookup_rejects_out_of_range_inputs_before_unchecked_indexing() {
++        let rows = InputToRow::<2>::new(256, |column, row| {
++            if column == 0 {
++                ((row >> 4) & 15) as u64
++            } else {
++                (row & 15) as u64
++            }
++        });
++        assert_eq!(rows.row(&[M31::from(15), M31::from(15)]), 255);
++        // The first tuple would index one past the multiplicity column. The second aliases a
++        // valid row, but its key is not in the preprocessed table either.
++        for input in [[16_u32, 0_u32], [0_u32, 16_u32]] {
++            assert!(std::panic::catch_unwind(|| {
++                rows.row(&input.map(M31::from));
++            })
++            .is_err());
++        }
++    }
++
+     #[test]
+     fn test_atomic_multiplicities_column() {
+         let size = N_LANES;

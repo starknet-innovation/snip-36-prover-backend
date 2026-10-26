@@ -1,29 +1,3 @@
-diff --git a/crates/cairo_verifier/src/verify.rs b/crates/cairo_verifier/src/verify.rs
-index 1f0d965..c1ff9ca 100644
---- a/crates/cairo_verifier/src/verify.rs
-+++ b/crates/cairo_verifier/src/verify.rs
-@@ -86,7 +86,9 @@ pub fn verify_fixed_cairo_circuit(
-     if outputs.len() != verifier_config.n_outputs {
-         return Err("The proof claim does not match the expected number of outputs.".to_string());
-     }
--    let context = build_fixed_cairo_circuit(verifier_config, proof, public_claim, outputs);
-+    let mut context = build_fixed_cairo_circuit(verifier_config, proof, public_claim, outputs);
-+    // The returned context is verified, not proved.
-+    context.keep_on_padding();
- 
-     // Check the verifier circuit gates topology only in test mode.
-     #[cfg(test)]
-@@ -136,7 +138,9 @@ pub fn build_fixed_cairo_circuit(
-     let proof_vars = proof.guess(&mut context);
-     verify(&mut context, &proof_vars, config, &statement);
- 
--    context.finalize(false)
-+    let mut context = context.finalize(false);
-+    context.release_on_padding();
-+    context
- }
- 
- /// Builds the Cairo verifier circuit topology without needing a proof.
 diff --git a/crates/circuit_common/Cargo.toml b/crates/circuit_common/Cargo.toml
 index c8437e6..7d737c3 100644
 --- a/crates/circuit_common/Cargo.toml
@@ -36,32 +10,8 @@ index c8437e6..7d737c3 100644
  itertools.workspace = true
  rand_chacha.workspace = true
  
-diff --git a/crates/circuit_common/src/finalize.rs b/crates/circuit_common/src/finalize.rs
-index 17aac5e..6142776 100644
---- a/crates/circuit_common/src/finalize.rs
-+++ b/crates/circuit_common/src/finalize.rs
-@@ -60,12 +60,13 @@ fn pad_blake_g_gate(context: &mut Context<impl IValue>) {
- // TODO(Ilya): Make it pub(crate).
- pub fn finalize_context(context: &mut FinalizedContext<impl IValue>) {
-     // Padding the components to a power of two.
--    let context = &mut context.context;
--    pad_eq(context);
--    pad_qm31_ops(context);
--    pad_triple_xor(context);
--    pad_m31_to_u32(context);
--    pad_blake_g_gate(context);
-+    let inner_context = &mut context.context;
-+    pad_eq(inner_context);
-+    pad_qm31_ops(inner_context);
-+    pad_triple_xor(inner_context);
-+    pad_m31_to_u32(inner_context);
-+    pad_blake_g_gate(inner_context);
-+    context.release_if_requested();
- }
- 
- /// Adds random values to the qm31_ops component via trivial.
 diff --git a/crates/circuit_common/src/preprocessed.rs b/crates/circuit_common/src/preprocessed.rs
-index 76aa910..45ae2a8 100644
+index 76aa910..162e3f7 100644
 --- a/crates/circuit_common/src/preprocessed.rs
 +++ b/crates/circuit_common/src/preprocessed.rs
 @@ -10,6 +10,7 @@ use circuits::context::FinalizedContext;
@@ -380,16 +330,7 @@ index 76aa910..45ae2a8 100644
      }
  }
  
-@@ -473,6 +698,8 @@ pub struct PreprocessedCircuit {
- impl PreprocessedCircuit {
-     /// Finalizes the context, then builds the preprocessed circuit.
-     pub fn preprocess_circuit(context: &mut FinalizedContext<impl IValue>) -> Self {
-+        // The circuit is read after padding here, so it is kept.
-+        context.keep_on_padding();
-         finalize_context(context);
-         Self::from_finalized_circuit(context.circuit())
-     }
-@@ -502,21 +729,76 @@ impl PreprocessedCircuit {
+@@ -502,21 +727,76 @@ impl PreprocessedCircuit {
              output,
          } = circuit;
  
@@ -480,7 +421,7 @@ index 76aa910..45ae2a8 100644
  
          PreProcessedTrace::add_fixed_preprocessed_columns(&mut pp_trace);
          pp_trace.sort_by_size();
-@@ -533,21 +815,3 @@ impl PreprocessedCircuit {
+@@ -533,21 +813,3 @@ impl PreprocessedCircuit {
          }
      }
  }
@@ -549,10 +490,69 @@ index 58cb8f5..e68d013 100644
              for j in 0..1 << EXPAND_BITS {
                  let multiplicity = eval.next_trace_mask();
 diff --git a/crates/circuit_prover/src/prover.rs b/crates/circuit_prover/src/prover.rs
-index e10f292..b1f4ead 100644
+index e10f292..be1c4bc 100644
 --- a/crates/circuit_prover/src/prover.rs
 +++ b/crates/circuit_prover/src/prover.rs
-@@ -158,11 +158,15 @@ where
+@@ -1,3 +1,5 @@
++use std::borrow::Cow;
++
+ use crate::circuit_air::circuit_components::CircuitComponents;
+ use crate::witness::trace::TraceGenerator;
+ use crate::witness::trace::write_interaction_trace;
+@@ -129,6 +131,52 @@ pub fn prove_circuit_with_precompute<'a, MC>(
+     values: &[QM31],
+     pcs_config: PcsConfig,
+ ) -> Result<CircuitProof<MC::H>, ProvingError>
++where
++    MC: MerkleChannel,
++    SimdBackend: stwo::prover::backend::BackendForChannel<MC>,
++{
++    prove_circuit_with_precompute_values(
++        base_column_pool,
++        twiddles,
++        preprocessed_circuit,
++        preprocessed_tree,
++        Cow::Borrowed(values),
++        pcs_config,
++    )
++}
++
++/// Owns a padded assignment and frees it as soon as its base trace has been written.
++/// The assignment is never shared with another proof through process-wide state.
++pub fn prove_circuit_with_precompute_owned<'a, MC>(
++    base_column_pool: &BaseColumnPool<SimdBackend>,
++    twiddles: &TwiddleTree<SimdBackend>,
++    preprocessed_circuit: &PreprocessedCircuit,
++    preprocessed_tree: MaybeOwned<'a, CommitmentTreeProver<SimdBackend, MC>>,
++    values: Vec<QM31>,
++    pcs_config: PcsConfig,
++) -> Result<CircuitProof<MC::H>, ProvingError>
++where
++    MC: MerkleChannel,
++    SimdBackend: stwo::prover::backend::BackendForChannel<MC>,
++{
++    prove_circuit_with_precompute_values(
++        base_column_pool,
++        twiddles,
++        preprocessed_circuit,
++        preprocessed_tree,
++        Cow::Owned(values),
++        pcs_config,
++    )
++}
++
++fn prove_circuit_with_precompute_values<'a, MC>(
++    base_column_pool: &BaseColumnPool<SimdBackend>,
++    twiddles: &TwiddleTree<SimdBackend>,
++    preprocessed_circuit: &PreprocessedCircuit,
++    preprocessed_tree: MaybeOwned<'a, CommitmentTreeProver<SimdBackend, MC>>,
++    values: Cow<'_, [QM31]>,
++    pcs_config: PcsConfig,
++) -> Result<CircuitProof<MC::H>, ProvingError>
+ where
+     MC: MerkleChannel,
+     SimdBackend: stwo::prover::backend::BackendForChannel<MC>,
+@@ -158,15 +206,13 @@ where
          base_column_pool,
      );
  
@@ -561,20 +561,19 @@ index e10f292..b1f4ead 100644
      // Preprocessed trace.
      commitment_scheme.commit_tree(preprocessed_tree, channel);
  
-+    // A context released at padding hands its values over instead of `values` (see
-+    // `FinalizedContext::release_on_padding`); they are freed once the base trace is written.
-+    let released_values =
-+        if values.is_empty() { circuits::ivalue::take_released_values() } else { None };
-+    let values = released_values.as_deref().unwrap_or(values);
-+
      // Base trace.
      let mut tree_builder = commitment_scheme.tree_builder();
      let (claim, component_log_sizes, interaction_generator) = write_trace(
-@@ -175,6 +179,7 @@ where
+-        values,
++        values.as_ref(),
+         preprocessed_trace.clone(),
+         *n_outputs,
+         &mut tree_builder,
+@@ -175,6 +221,7 @@ where
      );
  
      claim.mix_into(channel);
-+    drop(released_values);
++    drop(values);
      tree_builder.commit(channel);
  
      // Draw interaction elements.
@@ -2130,23 +2129,16 @@ index 8145a68..4e7fc55 100644
          (col_gen.par_iter_mut(), &self.lookup_data.gate_1, &self.lookup_data.mults_0)
              .into_par_iter()
 diff --git a/crates/circuit_prover/src/witness/components/prelude.rs b/crates/circuit_prover/src/witness/components/prelude.rs
-index 8a97bf5..88b2d89 100644
+index 8a97bf5..3d2f58b 100644
 --- a/crates/circuit_prover/src/witness/components/prelude.rs
 +++ b/crates/circuit_prover/src/witness/components/prelude.rs
-@@ -1,30 +1,21 @@
+@@ -1,30 +1,23 @@
 -pub use crate::witness::utils::pack_values;
-+pub use std::array::from_fn;
-+pub use std::simd::num::{SimdInt, SimdUint};
-+pub use std::simd::{Simd, u32x16};
-+pub use std::sync::Arc;
-+pub use std::sync::atomic::{AtomicU32, Ordering};
-+
- pub use circuit_common::Qm31OpsTraceGenerator;
- pub use circuit_common::preprocessed::PreProcessedTrace;
+-pub use circuit_common::Qm31OpsTraceGenerator;
+-pub use circuit_common::preprocessed::PreProcessedTrace;
 -pub use circuit_verifier::circuit_claim::ClaimedSum;
 -pub use circuit_verifier::circuit_claim::ComponentLogSize;
-+pub use circuit_verifier::circuit_claim::{ClaimedSum, ComponentLogSize};
- pub use circuit_verifier::relations;
+-pub use circuit_verifier::relations;
 -pub use itertools::Itertools;
 -pub use itertools::multizip;
 -pub use num_traits::One;
@@ -2156,15 +2148,24 @@ index 8a97bf5..88b2d89 100644
 -pub use rayon::iter::IntoParallelRefIterator;
 -pub use rayon::iter::IntoParallelRefMutIterator;
 -pub use rayon::iter::ParallelIterator;
--pub use std::array::from_fn;
--pub use std::collections::HashMap;
+ pub use std::array::from_fn;
+ pub use std::collections::HashMap;
 -pub use std::simd::Simd;
 -pub use std::simd::num::SimdInt;
 -pub use std::simd::num::SimdUint;
 -pub use std::simd::u32x16;
--pub use std::sync::Arc;
++pub use std::simd::cmp::SimdPartialOrd;
++pub use std::simd::num::{SimdInt, SimdUint};
++pub use std::simd::{Simd, u32x16};
+ pub use std::sync::Arc;
 -pub use std::sync::atomic::AtomicU32;
 -pub use std::sync::atomic::Ordering;
++pub use std::sync::atomic::{AtomicU32, Ordering};
++
++pub use circuit_common::Qm31OpsTraceGenerator;
++pub use circuit_common::preprocessed::PreProcessedTrace;
++pub use circuit_verifier::circuit_claim::{ClaimedSum, ComponentLogSize};
++pub use circuit_verifier::relations;
 +pub use itertools::{Itertools, multizip};
 +pub use num_traits::{One, Zero};
 +pub use rayon::iter::{
@@ -2178,7 +2179,7 @@ index 8a97bf5..88b2d89 100644
  pub use stwo::core::poly::circle::CanonicCoset;
  pub use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
  pub use stwo::prover::TreeBuilder;
-@@ -50,9 +41,10 @@ pub use stwo_cairo_prover::witness::fast_deduction::blake::{
+@@ -50,9 +43,10 @@ pub use stwo_cairo_prover::witness::fast_deduction::blake::{
      G_STATE_INDICES, PackedBlakeRoundSigma, PackedTripleXor32,
  };
  pub use stwo_cairo_prover::witness::utils::{AtomicMultiplicityColumn, Enabler};
@@ -2191,7 +2192,7 @@ index 8a97bf5..88b2d89 100644
  
  const NUM_INPUT_WORDS_G: usize = 6;
  const NUM_OUTPUT_WORDS_G: usize = 4;
-@@ -102,33 +94,142 @@ impl PackedBlakeG {
+@@ -102,33 +96,138 @@ impl PackedBlakeG {
  pub fn make_input_to_row<const N: usize>(
      preprocessed_trace: &PreProcessedTrace,
      column_ids: [PreProcessedColumnId; N],
@@ -2223,53 +2224,6 @@ index 8a97bf5..88b2d89 100644
 +    pack_values(&values)
 +}
 +
-+/// A fast, deterministic hasher for the witness' lookup maps: their keys are small arrays of
-+/// field elements, and SipHash dominates both the construction of the maps and the lookups.
-+/// Iteration order is never relied on (the default hasher is randomized), so the choice of
-+/// hasher cannot change the trace.
-+#[derive(Default, Clone, Copy)]
-+pub struct FastHasher(u64);
-+
-+impl std::hash::Hasher for FastHasher {
-+    #[inline]
-+    fn finish(&self) -> u64 {
-+        self.0
-+    }
-+
-+    #[inline]
-+    fn write(&mut self, bytes: &[u8]) {
-+        for chunk in bytes.chunks(8) {
-+            let mut word = [0u8; 8];
-+            word[..chunk.len()].copy_from_slice(chunk);
-+            self.write_u64(u64::from_le_bytes(word));
-         }
-     }
- 
--    result
-+    #[inline]
-+    fn write_u32(&mut self, i: u32) {
-+        self.write_u64(i as u64);
-+    }
-+
-+    #[inline]
-+    fn write_u64(&mut self, i: u64) {
-+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
-+    }
-+
-+    #[inline]
-+    fn write_usize(&mut self, i: usize) {
-+        self.write_u64(i as u64);
-+    }
- }
- 
--pub fn pack_preprocessed_column(column: &[usize]) -> Vec<PackedM31> {
--    let values: Vec<M31> = column.par_iter().map(|&v| M31::from(v)).collect();
--    pack_values(&values)
-+pub type FastHasherBuilder = std::hash::BuildHasherDefault<FastHasher>;
-+
-+/// [`std::collections::HashMap`] with [`FastHasher`].
-+pub type HashMap<K, V> = std::collections::HashMap<K, V, FastHasherBuilder>;
-+
 +/// The row of a const-size component's preprocessed table for an input tuple.
 +///
 +/// When the key columns are bit fields of the row index that cover all its bits (the range-check
@@ -2277,8 +2231,9 @@ index 8a97bf5..88b2d89 100644
 +/// which is checked over every row when the table is built), the row is the sum of the shifted
 +/// key values; otherwise it is looked up in a map.
 +pub struct InputToRow<const N: usize> {
-+    /// `(key index, shift)` of the bit fields; empty when the map is used.
-+    fields: Vec<(usize, u32)>,
++    /// `(key index, shift, maximum value)` of the bit fields; empty when the map is used.
++    fields: Vec<(usize, u32, u64)>,
++    n_rows: usize,
 +    map: HashMap<[M31; N], usize>,
 +}
 +
@@ -2291,9 +2246,20 @@ index 8a97bf5..88b2d89 100644
 +            })
 +        } else {
 +            let mut rows = std::simd::Simd::<u32, 16>::splat(0);
-+            for &(i, shift) in &self.fields {
-+                rows += input[i].into_simd() << shift;
++            for &(i, shift, maximum) in &self.fields {
++                let values = std::simd::Simd::from_array(input[i].to_array().map(|v| v.0));
++                assert!(
++                    values
++                        .simd_le(std::simd::Simd::splat(maximum.min(u32::MAX as u64) as u32))
++                        .all(),
++                    "lookup value exceeds its table field width"
++                );
++                rows += values << shift;
 +            }
++            assert!(
++                rows.simd_lt(std::simd::Simd::splat(self.n_rows.try_into().unwrap())).all(),
++                "lookup row exceeds table bounds"
++            );
 +            rows.to_array()
 +        }
 +    }
@@ -2302,7 +2268,7 @@ index 8a97bf5..88b2d89 100644
 +    pub fn new(n_rows: usize, at: impl Fn(usize, usize) -> u64) -> Self {
 +        let log_size = n_rows.ilog2();
 +        assert_eq!(1 << log_size, n_rows);
-+        let mut fields: Vec<(usize, u32)> = Vec::new();
++        let mut fields: Vec<(usize, u32, u64)> = Vec::new();
 +        let mut covered: u64 = 0;
 +        for i in 0..N {
 +            // The values at the rows 1, 2, 4, ... say which bits a bit-field column would hold.
@@ -2327,27 +2293,58 @@ index 8a97bf5..88b2d89 100644
 +                continue;
 +            }
 +            covered |= field_mask;
-+            fields.push((i, shift as u32));
++            fields.push((i, shift as u32, low_mask));
 +        }
 +        if covered == (1u64 << log_size) - 1 {
-+            return Self { fields, map: HashMap::default() };
++            return Self { fields, n_rows, map: HashMap::new() };
 +        }
-+        let mut map: HashMap<[M31; N], usize> =
-+            HashMap::with_capacity_and_hasher(n_rows, Default::default());
++        let mut map: HashMap<[M31; N], usize> = HashMap::with_capacity(n_rows);
 +        for r in 0..n_rows {
 +            let key: [M31; N] = std::array::from_fn(|i| M31::from(at(i, r) as u32));
 +            map.insert(key, r);
-+        }
-+        Self { fields: Vec::new(), map }
-+    }
-+
+         }
++        Self { fields: Vec::new(), n_rows, map }
+     }
+ 
+-    result
 +    /// The row holding `input`.
 +    #[inline]
 +    pub fn row(&self, input: &[M31; N]) -> usize {
 +        if self.fields.is_empty() {
 +            *self.map.get(input).unwrap()
 +        } else {
-+            self.fields.iter().map(|&(i, shift)| (input[i].0 as usize) << shift).sum()
++            let row = self
++                .fields
++                .iter()
++                .map(|&(i, shift, maximum)| {
++                    let value = input[i].0 as u64;
++                    assert!(value <= maximum, "lookup value exceeds its table field width");
++                    (value as usize) << shift
++                })
++                .sum();
++            assert!(row < self.n_rows, "lookup row exceeds table bounds");
++            row
++        }
++    }
+ }
+ 
+-pub fn pack_preprocessed_column(column: &[usize]) -> Vec<PackedM31> {
+-    let values: Vec<M31> = column.par_iter().map(|&v| M31::from(v)).collect();
+-    pack_values(&values)
++#[cfg(test)]
++mod input_to_row_tests {
++    use super::{InputToRow, M31, PackedM31};
++
++    #[test]
++    fn bit_field_lookup_rejects_invalid_scalar_and_packed_inputs() {
++        let rows = InputToRow::<2>::new(256, |column, row| {
++            if column == 0 { ((row >> 4) & 15) as u64 } else { (row & 15) as u64 }
++        });
++        assert_eq!(rows.row(&[M31::from(15), M31::from(15)]), 255);
++        for input in [[16_u32, 0_u32], [0_u32, 16_u32]] {
++            assert!(std::panic::catch_unwind(|| rows.row(&input.map(M31::from))).is_err());
++            let packed = input.map(|value| PackedM31::broadcast(M31::from(value)));
++            assert!(std::panic::catch_unwind(|| rows.rows_packed(&packed)).is_err());
 +        }
 +    }
  }
@@ -2932,106 +2929,47 @@ index c612c78..fde4cee 100644
  
      /// Verifies that each variable appears exactly once as a yield.
 diff --git a/crates/circuits/src/context.rs b/crates/circuits/src/context.rs
-index fcc49a3..513f486 100644
+index fcc49a3..abec57e 100644
 --- a/crates/circuits/src/context.rs
 +++ b/crates/circuits/src/context.rs
-@@ -75,6 +75,9 @@ pub struct Context<Value: IValue> {
-     /// Debug only. If true, equality is asserted when adding the `eq` gate; if false, no
-     /// assertion is made during construction and equality can be checked later at validation.
-     pub assert_eq_on_eval: bool,
-+    /// Set by [FinalizedContext::release_on_padding]: padding then hands the values to the proof
-+    /// and frees the gates.
-+    release_on_padding: bool,
- }
- 
- impl<Value: IValue> Context<Value> {
-@@ -232,6 +235,7 @@ impl<Value: IValue> Default for Context<Value> {
-             guessed_vars: Some(vec![]),
-             reserved_vars: vec![],
-             assert_eq_on_eval: false,
-+            release_on_padding: false,
-         };
-         // Register zero, one, and u as the first constants.
-         res.constant(QM31::zero());
-@@ -287,6 +291,33 @@ impl<Value: IValue> FinalizedContext<Value> {
-     pub fn get(&self, var: Var) -> Value {
-         self.context.get(var)
+@@ -280,6 +280,12 @@ impl<Value: IValue> FinalizedContext<Value> {
+         self.context.values()
      }
-+
-+    /// Marks this context as one whose padding is its last change before it is proved: padding
-+    /// then hands the values over to the proof, which reads them only to write its base trace and
-+    /// frees them right after, and frees the gates, which nothing reads once the circuit is padded
-+    /// (the proof reads the preprocessed circuit). Afterwards [Self::values] is empty and
-+    /// [Self::circuit] keeps only `n_vars`.
-+    pub fn release_on_padding(&mut self) {
-+        self.context.release_on_padding = true;
+ 
++    /// Moves the padded values out so the rest of the context can be freed before proving.
++    /// Ownership stays with this proof, including when several proofs run concurrently.
++    pub fn into_values(mut self) -> Vec<Value> {
++        std::mem::take(&mut self.context.values)
 +    }
 +
-+    /// Clears [Self::release_on_padding], for a caller that reads the circuit after padding it.
-+    pub fn keep_on_padding(&mut self) {
-+        self.context.release_on_padding = false;
-+    }
-+
-+    /// Called once the context is padded: releases it if [Self::release_on_padding] was set.
-+    pub fn release_if_requested(&mut self) {
-+        let context = &mut self.context;
-+        if !std::mem::take(&mut context.release_on_padding) {
-+            return;
-+        }
-+        Value::release_values(std::mem::take(&mut context.values));
-+        context.circuit = Circuit { n_vars: context.circuit.n_vars, ..Circuit::default() };
-+        context.constants = IndexMap::new();
-+        context.unused_vars = HashSet::new();
-+        context.maybe_unused_vars = HashSet::new();
-+    }
+     pub fn check_vars_used(&self) {
+         self.context.check_vars_used();
+     }
+diff --git a/crates/circuits/src/context_test.rs b/crates/circuits/src/context_test.rs
+index 764bec2..e97b3e0 100644
+--- a/crates/circuits/src/context_test.rs
++++ b/crates/circuits/src/context_test.rs
+@@ -20,6 +20,23 @@ fn test_constants() {
+     context.validate_circuit();
  }
  
- impl FinalizedContext<QM31> {
-diff --git a/crates/circuits/src/ivalue.rs b/crates/circuits/src/ivalue.rs
-index 4b71c36..f68c050 100644
---- a/crates/circuits/src/ivalue.rs
-+++ b/crates/circuits/src/ivalue.rs
-@@ -1,7 +1,8 @@
- use itertools::Itertools;
- use num_traits::Zero;
-+use stwo::core::fields::cm31::CM31;
-+use stwo::core::fields::m31::M31;
- use stwo::core::fields::qm31::QM31;
--use stwo::core::fields::{cm31::CM31, m31::M31};
- 
- use crate::blake::{HashValue, blake_qm31};
- 
-@@ -60,6 +61,22 @@ pub trait IValue:
- 
-     /// Unpacks a QM31 limb representation `(low_u16, high_u16, 0, 0)` back into a `u32`.
-     fn unpack_u32(&self) -> u32;
++#[test]
++fn finalized_context_values_remain_owned_by_their_proof() {
++    let first_value = qm31_from_u32s(11, 0, 0, 0);
++    let second_value = qm31_from_u32s(22, 0, 0, 0);
++    let mut first = TraceContext::default();
++    let mut second = TraceContext::default();
++    first.constant(first_value);
++    second.constant(second_value);
 +
-+    /// Takes the values of a context released at padding (see
-+    /// [`FinalizedContext::release_on_padding`](crate::context::FinalizedContext::release_on_padding)).
-+    /// Only [QM31] values are proved; other values are dropped.
-+    fn release_values(values: Vec<Self>) {
-+        drop(values);
-+    }
++    let first = first.finalize(false);
++    let second = second.finalize(false);
++    let first_values = first.into_values();
++    let second_values = second.into_values();
++    assert_eq!(first_values[3], first_value);
++    assert_eq!(second_values[3], second_value);
 +}
 +
-+/// The values of the last context released at padding, waiting for its proof to take them (see
-+/// [`take_released_values`]).
-+static RELEASED_VALUES: std::sync::Mutex<Option<Vec<QM31>>> = std::sync::Mutex::new(None);
-+
-+/// Takes the values of the last context released at padding, if its proof has not taken them yet.
-+pub fn take_released_values() -> Option<Vec<QM31>> {
-+    RELEASED_VALUES.lock().unwrap().take()
- }
- 
- impl IValue for QM31 {
-@@ -112,6 +129,10 @@ impl IValue for QM31 {
-         assert!(low <= 0xFFFF && high <= 0xFFFF, "low and high coordinates must be u16 values");
-         low | (high << 16)
-     }
-+
-+    fn release_values(values: Vec<Self>) {
-+        *RELEASED_VALUES.lock().unwrap() = Some(values);
-+    }
- }
- 
- #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
+ #[test]
+ fn test_set_outputs() {
+     let mut context = TraceContext::default();

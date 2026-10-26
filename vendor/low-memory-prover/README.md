@@ -13,7 +13,7 @@ They change how the prover schedules and frees memory, never what it proves:
 |---|---|---|
 | `stwo.patch` | starkware-libs/stwo `489a0f3e` | 30 (prover backend, PCS, Merkle, FRI, constraint framework) |
 | `stwo-cairo.patch` | starkware-libs/stwo-cairo `9b6be271` | 23 (witness lookup tables, Cairo prover entry point, one prover-only AIR fast path) |
-| `stwo-circuits.patch` | starkware-libs/stwo-circuits `5ef951a1` | 22 (compact preprocessed columns, value release at padding, witness) |
+| `stwo-circuits.patch` | starkware-libs/stwo-circuits `5ef951a1` | 21 (compact preprocessed columns, per-proof value release after the base trace, witness) |
 | `proving-utils.patch` | starkware-libs/proving-utils `3035dd00` | 4 (`privacy_prove`: lazy precomputes, allocator, ordering) |
 
 These are the revisions `SEQUENCER_TAG` pins in its `Cargo.lock` (both
@@ -23,8 +23,8 @@ the unpatched prover instead.
 
 ## Measurements
 
-Apple M-series, `privacy_recursive_prove` on STRK20 privacy-pool transactions
-(captured Cairo PIEs), alternating runs:
+Original PR #128 measurements on Apple M-series, `privacy_recursive_prove` on
+STRK20 privacy-pool transactions (captured Cairo PIEs), alternating runs:
 
 | | transfer | withdraw |
 |---|---|---|
@@ -33,8 +33,30 @@ Apple M-series, `privacy_recursive_prove` on STRK20 privacy-pool transactions
 
 End to end through `starknet_transaction_prover` (the server's peak RSS while
 proving a live Sepolia STRK20 transfer): 14.74 GB unpatched, 2.28 GB patched.
-The patched proof was accepted on Sepolia (tx
+The original PR #128 patched proof was accepted on Sepolia (tx
 `0x183f251d1f168bfc406c4d1357e3e6db30a43202577a93f18ec74b41411c937`).
+
+### Security-fix overhead versus PR #128
+
+On 2026-10-15, the original PR #128 patch and the security-fixed patch were
+built in release mode from the same pinned upstream revisions with
+`nightly-2026-01-15` on macOS arm64. The `low-memory-check` runner proved each
+fixture three times per variant, alternating the variants. Every run matched
+`expected.sha256`. These are medians; the
+[raw measurements](security-fix-benchmark-2026-10-15.csv) include all 12 runs.
+
+| Fixture | PR #128 prove wall | Fixed prove wall | PR #128 CPU | Fixed CPU | PR #128 peak RSS | Fixed peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| transfer | 17.6 s | 21.0 s | 115.63 s | 114.72 s | 2.151 GB | 2.168 GB |
+| withdraw | 16.1 s | 16.3 s | 103.63 s | 103.36 s | 2.907 GB | 2.907 GB |
+
+CPU is user plus system time across all prover threads. The transfer wall-time
+median was 19% higher on the fixed build, while CPU time was 0.8% lower and
+retired instructions differed by less than 0.3% on both fixtures. Other
+workloads were active on this host, so these wall-time samples cannot isolate
+a latency regression. The measurements show no material change in CPU work or
+peak memory for these fixtures; they do not measure Linux or concurrent proofs.
+The fixed branch has not had a live Sepolia prove and submission.
 
 ## How it was verified
 
@@ -70,11 +92,16 @@ groups run sequentially rather than in parallel: same bytes, a little less speed
 (feature `large-block-cache`, on by default, Unix only). Without it the peak is
 3.3–3.6 GB instead of 2.2–2.9 GB.
 
+The backport also keeps padded circuit values owned by their proof until the base
+trace has been written. Both stwo-cairo and stwo-circuits validate bit-field
+lookup inputs before passing row indices to unchecked multiplicity columns, and
+their witness hash maps retain randomized hashing for transaction-derived keys.
+
 ## Caveats
 
-- **One proof at a time per process.** stwo-circuits hands the padded circuit
-  values to the prover through a global. Keep `max_concurrent_requests` at 1
-  (the default).
+- **Memory under concurrency.** Circuit values are now isolated per proof.
+  `max_concurrent_requests` still defaults to 1; raising it increases peak memory
+  as multiple proofs overlap.
 - **Linux paths are untested.** Measurements are from macOS; part of
   `LargeBlockCache` (`madvise`, `malloc_trim`, zero-page reuse) only runs on
   Linux. Run the deps smoke test and a live prove on linux-x86_64 before
