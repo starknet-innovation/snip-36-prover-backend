@@ -2453,7 +2453,7 @@ index 2922fd3c..a0bdd60d 100644
          // Transpose the tail. If `tail_rows > 0` then necessarily we haven't entered the previous
          // loop.
 diff --git a/crates/stwo/src/prover/backend/simd/circle.rs b/crates/stwo/src/prover/backend/simd/circle.rs
-index cd26f940..bde0a2c2 100644
+index cd26f940..7db4ffb6 100644
 --- a/crates/stwo/src/prover/backend/simd/circle.rs
 +++ b/crates/stwo/src/prover/backend/simd/circle.rs
 @@ -23,15 +23,17 @@ use crate::core::poly::circle::{CanonicCoset, CircleDomain};
@@ -2475,7 +2475,7 @@ index cd26f940..bde0a2c2 100644
  
  impl SimdBackend {
      // TODO(Ohad): optimize.
-@@ -129,6 +131,277 @@ impl SimdBackend {
+@@ -129,6 +131,280 @@ impl SimdBackend {
  
  // TODO(shahars): Everything is returned in redundant representation, where values can also be P.
  // Decide if and when it's ok and what to do if it's not.
@@ -2517,6 +2517,9 @@ index cd26f940..bde0a2c2 100644
 +    unsafe {
 +        let ptr = transmute::<*mut PackedBaseField, *mut u32>(values.data.as_mut_ptr());
 +        if let Some((pool, mut coeffs)) = pooled {
++            // `give_back` checks lengths only in debug builds, and the transform writes
++            // `2^log_size` values through a raw pointer: check the buffer before handing it over.
++            assert!(coeffs.data.len() * N_LANES >= 1 << log_size);
 +            ifft::ifft_out_of_place(
 +                ptr.cast_const(),
 +                transmute::<*mut PackedBaseField, *mut u32>(coeffs.data.as_mut_ptr()),
@@ -2662,8 +2665,8 @@ index cd26f940..bde0a2c2 100644
 +    buffer
 +}
 +
-+/// Constants shared by all 256-word chunks of a twin-coset interpolation.
-+/// Adapted from Claude/Fable v12's grouped, blocked OODS evaluation.
++/// Constants shared by all 256-word chunks of a twin-coset interpolation (a grouped, blocked
++/// OODS evaluation).
 +struct TwinCosetWeightSetup {
 +    vanishing_scale: PackedSecureField,
 +    point_x: PackedSecureField,
@@ -2753,7 +2756,7 @@ index cd26f940..bde0a2c2 100644
  impl PolyOps for SimdBackend {
      // The twiddles type is i32, and not BaseField. This is because the fast AVX mul implementation
      //  requires one of the numbers to be shifted left by 1 bit. This is not a reduced
-@@ -139,30 +412,15 @@ impl PolyOps for SimdBackend {
+@@ -139,30 +415,15 @@ impl PolyOps for SimdBackend {
          eval: CircleEvaluation<Self, BaseField, BitReversedOrder>,
          twiddles: &TwiddleTree<Self>,
      ) -> CircleCoefficients<Self> {
@@ -2792,7 +2795,7 @@ index cd26f940..bde0a2c2 100644
      }
  
      fn eval_at_point(
-@@ -345,6 +603,233 @@ impl PolyOps for SimdBackend {
+@@ -345,6 +606,233 @@ impl PolyOps for SimdBackend {
              .sum::<SecureField>();
      }
  
@@ -3026,7 +3029,7 @@ index cd26f940..bde0a2c2 100644
      fn eval_at_point_by_folding(
          evals: &CircleEvaluation<Self, BaseField, BitReversedOrder>,
          point: CirclePoint<SecureField>,
-@@ -414,31 +899,107 @@ impl PolyOps for SimdBackend {
+@@ -414,31 +902,107 @@ impl PolyOps for SimdBackend {
          // Evaluate on big domains by evaluating on several subdomains.
          let log_subdomains = log_size - fft_log_size;
  
@@ -3155,7 +3158,7 @@ index cd26f940..bde0a2c2 100644
      }
  
      /// Precomputes the (doubled) twiddles for a given coset tower.
-@@ -547,6 +1108,121 @@ impl PolyOps for SimdBackend {
+@@ -547,6 +1111,121 @@ impl PolyOps for SimdBackend {
      }
  }
  
@@ -3277,7 +3280,7 @@ index cd26f940..bde0a2c2 100644
  fn compute_small_coset_twiddles(coset: Coset) -> TwiddleTree<SimdBackend> {
      let twiddles = slow_precompute_twiddles(coset);
  
-@@ -621,6 +1297,303 @@ fn slow_eval_at_point(
+@@ -621,6 +1300,303 @@ fn slow_eval_at_point(
      fold(poly.coeffs.as_slice(), &mappings)
  }
  
@@ -3339,7 +3342,7 @@ index cd26f940..bde0a2c2 100644
 +    let n_chunks = 1usize << (n - PrefixPlan::LOW);
 +    let tile = 1usize << plan.tile_bits;
 +    if bary {
-+        // Q722: one weighted accumulate per block, tile by tile so the column is read once.
++        // One weighted accumulate per block, tile by tile so the column is read once.
 +        let mut acc = vec![[PackedBaseField::zero(); 2]; plan.blocks.len()];
 +        for t in 0..n_chunks >> plan.tile_bits {
 +            let src = &unfolded[2 * t * tile..2 * (t + 1) * tile];
@@ -3456,14 +3459,14 @@ index cd26f940..bde0a2c2 100644
 +    coeffs: Vec<Vec<BaseField>>,
 +    /// Each point's own factors, highest first (`pi^3(x), ..., x, y`), as `fold` takes them.
 +    own: Vec<[BaseField; 5]>,
-+    /// Q722: the folded layers as one weighted sum. A fold `(a + b) + (a - b) c` is
++    /// The folded layers as one weighted sum. A fold `(a + b) + (a - b) c` is
 +    /// `a (1 + c) + b (1 - c)`, so the top value is `sum_i weights[i] * chunk_i`, the weight of
 +    /// chunk `i` being the product of its `(1 +- c)` along its path. Exact: the same field
 +    /// operations, reassociated. Empty unless the bary tail is on.
 +    weights: Vec<BaseField>,
 +}
 +
-+/// Whether the decommit evaluates the folded layers as one weighted sum per block (Q722).
++/// Whether the decommit evaluates the folded layers as one weighted sum per block.
 +fn bary_tail() -> bool {
 +    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| true);
 +    *ON
@@ -3736,7 +3739,7 @@ index 4f7140bf..8a69c8e9 100644
          let Self([a, b]) = self;
          Self([-a, -b])
 diff --git a/crates/stwo/src/prover/backend/simd/column.rs b/crates/stwo/src/prover/backend/simd/column.rs
-index a7a27e60..460c813f 100644
+index a7a27e60..d21ea3af 100644
 --- a/crates/stwo/src/prover/backend/simd/column.rs
 +++ b/crates/stwo/src/prover/backend/simd/column.rs
 @@ -1,4 +1,6 @@
@@ -3746,7 +3749,7 @@ index a7a27e60..460c813f 100644
  use std::{array, mem};
  
  use bytemuck::allocation::cast_vec;
-@@ -16,11 +18,96 @@ use super::very_packed_m31::{
+@@ -16,11 +18,118 @@ use super::very_packed_m31::{
  };
  use super::SimdBackend;
  use crate::core::fields::cm31::CM31;
@@ -3773,6 +3776,8 @@ index a7a27e60..460c813f 100644
 +        offset: i64,
 +    ) -> *mut core::ffi::c_void;
 +    fn munmap(addr: *mut core::ffi::c_void, length: usize) -> core::ffi::c_int;
++    #[cfg(target_os = "linux")]
++    safe fn sysconf(name: core::ffi::c_int) -> core::ffi::c_long;
 +    /// glibc: hands the free pages of every malloc arena back to the kernel; thread-safe.
 +    #[cfg(all(target_os = "linux", target_env = "gnu"))]
 +    safe fn malloc_trim(pad: usize) -> core::ffi::c_int;
@@ -3812,15 +3817,35 @@ index a7a27e60..460c813f 100644
 +    advise_range(start, len, MADV_DONTNEED);
 +}
 +
-+/// The whole 4 KiB pages inside `[addr, addr + bytes)`, or an empty range for a buffer below
++/// The kernel's page size. Not always 4 KiB: aarch64 kernels may use 16 or 64 KiB pages, and
++/// `madvise` rounds its length up to a whole kernel page, so a range rounded to 4 KiB would reach
++/// past the buffer (and `MADV_DONTNEED` would zero the bytes after it).
++fn page_size() -> usize {
++    #[cfg(target_os = "linux")]
++    {
++        static PAGE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++        *PAGE.get_or_init(|| {
++            // `_SC_PAGESIZE` is 30 on Linux (glibc and musl). If the call fails, assume the largest
++            // page in use, which only shrinks the inward-rounded ranges.
++            let page = sysconf(30);
++            if page > 0 { page as usize } else { 1 << 16 }
++        })
++    }
++    #[cfg(not(target_os = "linux"))]
++    {
++        4096
++    }
++}
++
++/// The whole kernel pages inside `[addr, addr + bytes)`, or an empty range for a buffer below
 +/// 2 MiB, which is not worth a system call.
 +fn whole_pages(addr: usize, bytes: usize) -> (usize, usize) {
-+    const PAGE: usize = 4096;
 +    if bytes < 1 << 21 {
 +        return (0, 0);
 +    }
-+    let start = (addr + PAGE - 1) & !(PAGE - 1);
-+    let end = (addr + bytes) & !(PAGE - 1);
++    let page = page_size();
++    let start = (addr + page - 1) & !(page - 1);
++    let end = (addr + bytes) & !(page - 1);
 +    (start, end.saturating_sub(start))
 +}
 +
@@ -3844,7 +3869,7 @@ index a7a27e60..460c813f 100644
  /// An efficient structure for storing and operating on a arbitrary number of [`BaseField`] values.
  #[derive(Clone, Debug)]
  pub struct BaseColumn {
-@@ -76,12 +163,10 @@ impl BaseColumn {
+@@ -76,12 +185,10 @@ impl BaseColumn {
      }
  }
  
@@ -3858,7 +3883,7 @@ index a7a27e60..460c813f 100644
          Self { data, length }
      }
  
-@@ -89,6 +174,7 @@ impl Column<BaseField> for BaseColumn {
+@@ -89,6 +196,7 @@ impl Column<BaseField> for BaseColumn {
      unsafe fn uninitialized(length: usize) -> Self {
          let mut data = Vec::with_capacity(length.div_ceil(N_LANES));
          data.set_len(length.div_ceil(N_LANES));
@@ -3866,7 +3891,7 @@ index a7a27e60..460c813f 100644
          Self { data, length }
      }
  
-@@ -96,12 +182,22 @@ impl Column<BaseField> for BaseColumn {
+@@ -96,12 +204,22 @@ impl Column<BaseField> for BaseColumn {
          self.as_slice().to_vec()
      }
  
@@ -3890,7 +3915,7 @@ index a7a27e60..460c813f 100644
      }
  
      fn set(&mut self, index: usize, value: BaseField) {
-@@ -123,6 +219,60 @@ impl Column<BaseField> for BaseColumn {
+@@ -123,6 +241,60 @@ impl Column<BaseField> for BaseColumn {
              },
          )
      }
@@ -3951,7 +3976,7 @@ index a7a27e60..460c813f 100644
  }
  
  impl FromIterator<BaseField> for BaseColumn {
-@@ -153,9 +303,6 @@ pub struct CM31Column {
+@@ -153,9 +325,6 @@ pub struct CM31Column {
      pub length: usize,
  }
  
@@ -3961,7 +3986,7 @@ index a7a27e60..460c813f 100644
  impl Column<CM31> for CM31Column {
      fn zeros(length: usize) -> Self {
          Self {
-@@ -286,9 +433,6 @@ impl SecureColumn {
+@@ -286,9 +455,6 @@ impl SecureColumn {
      }
  }
  
@@ -3971,7 +3996,7 @@ index a7a27e60..460c813f 100644
  impl Column<SecureField> for SecureColumn {
      fn zeros(length: usize) -> Self {
          Self {
-@@ -421,6 +565,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
+@@ -421,6 +587,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
      /// # Safety
      ///
      /// `vec_index` must be a valid index.
@@ -3979,7 +4004,7 @@ index a7a27e60..460c813f 100644
      pub unsafe fn packed_at(&self, vec_index: usize) -> VeryPackedSecureField {
          VeryPackedQM31::from_very_packed_m31s(std::array::from_fn(|i| {
              *self.0[i].0.get_unchecked(vec_index)
-@@ -430,6 +575,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
+@@ -430,6 +597,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
      /// # Safety
      ///
      /// `vec_index` must be a valid index.
@@ -3987,7 +4012,7 @@ index a7a27e60..460c813f 100644
      pub unsafe fn set_packed(&mut self, vec_index: usize, value: VeryPackedSecureField) {
          let [a, b, c, d] = value.into_very_packed_m31s();
          *self.0[0].0.get_unchecked_mut(vec_index) = a;
-@@ -724,6 +870,250 @@ impl VeryPackedSecureColumnByCoords {
+@@ -724,6 +892,250 @@ impl VeryPackedSecureColumnByCoords {
      }
  }
  
@@ -4927,7 +4952,7 @@ index 6881975a..d5235a75 100644
          u32x16::splat(*twiddle_dbl[0].get_unchecked((index + i) & (twiddle_dbl[0].len() - 1)))
      });
 diff --git a/crates/stwo/src/prover/backend/simd/grind.rs b/crates/stwo/src/prover/backend/simd/grind.rs
-index ecd1ab74..31f24e2a 100644
+index ecd1ab74..52bf1956 100644
 --- a/crates/stwo/src/prover/backend/simd/grind.rs
 +++ b/crates/stwo/src/prover/backend/simd/grind.rs
 @@ -1,6 +1,6 @@
@@ -5194,13 +5219,12 @@ index ecd1ab74..31f24e2a 100644
          }
          attempt_low += u32x16::splat(N_LANES as u32);
      }
-@@ -94,41 +257,39 @@ fn grind_blake<const IS_M31_OUTPUT: bool>(digest: &[u32], hi: u32, pow_bits: u32
+@@ -94,41 +257,38 @@ fn grind_blake<const IS_M31_OUTPUT: bool>(digest: &[u32], hi: u32, pow_bits: u32
  
  // Deterministically finds the smallest nonce that satisfies:
  // `hash(digest, nonce).trailing_zeros() >= pow_bits`.
 +// Units of `1 << GRIND_UNIT_BITS` low nonces are handed out in nonce order, so every unit below
 +// the first solution is searched, and a thread stops after at most one short unit.
-+// Short units: the maintainers' positive control (workshop thread bt1_2ebe688baa6d50e483d4a9d2).
  #[cfg(feature = "parallel")]
 -fn parallel_grind<GRIND, DIGEST>(digest: DIGEST, pow_bits: u32, grind: GRIND) -> u64
 +fn parallel_grind<GRIND, DIGEST>(digest: DIGEST, pow_bits: u32, low_bits: u32, grind: GRIND) -> u64
@@ -5257,7 +5281,7 @@ index ecd1ab74..31f24e2a 100644
                      break;
                  }
              }
-@@ -161,11 +322,13 @@ pub mod poseidon252 {
+@@ -161,11 +321,13 @@ pub mod poseidon252 {
              ]);
              #[cfg(not(feature = "parallel"))]
              let res = (0..)
@@ -5273,7 +5297,7 @@ index ecd1ab74..31f24e2a 100644
  
              assert!(
                  ((res >> 32) as u32) < P,
-@@ -175,9 +338,14 @@ pub mod poseidon252 {
+@@ -175,9 +337,14 @@ pub mod poseidon252 {
          }
      }
  
@@ -5606,7 +5630,7 @@ index d26ae587..39b8589a 100644
          PackedQM31::broadcast(value)
      }
 diff --git a/crates/stwo/src/prover/backend/simd/quotients.rs b/crates/stwo/src/prover/backend/simd/quotients.rs
-index 82c12e26..e9d2294c 100644
+index 82c12e26..64627fce 100644
 --- a/crates/stwo/src/prover/backend/simd/quotients.rs
 +++ b/crates/stwo/src/prover/backend/simd/quotients.rs
 @@ -1,17 +1,18 @@
@@ -5731,7 +5755,7 @@ index 82c12e26..e9d2294c 100644
          };
  
          SecureEvaluation::new(eval_domain, evals)
-@@ -205,6 +246,14 @@ impl QuotientOps for SimdBackend {
+@@ -205,6 +246,12 @@ impl QuotientOps for SimdBackend {
  /// Note that `columns` are assumed to be evaluations over a possibly larger domain containing
  /// `subdomain`. It must hold that the points of `subdomain` in bit-reversed order form a prefix of
  /// the points of the larger domain in bit-reversed order.
@@ -5741,12 +5765,10 @@ index 82c12e26..e9d2294c 100644
 +/// (`x = hi * 2^31 + lo == hi + lo` modulo `P`) and added to a wide accumulator, and the `b`
 +/// coefficients, which do not depend on the row, are summed once per batch. The result equals
 +/// the per-term reduced computation modulo `P` (here it is fully reduced into `[0, P)`).
-+///
-+/// Deferred-reduction mechanism: workshop thread bt1_4527483bd364509b01f72c85.
  fn accumulate_numerators_on_subdomain(
      subdomain: CircleDomain,
      sample_batch: &ColumnSampleBatch,
-@@ -213,10 +262,59 @@ fn accumulate_numerators_on_subdomain(
+@@ -213,10 +260,59 @@ fn accumulate_numerators_on_subdomain(
  ) -> SecureColumnByCoords<SimdBackend> {
      // This constant is chosen empirically by benchmarking.
      const NUMERATORS_CHUNK_SIZE: usize = 1 << 6;
@@ -5806,7 +5828,7 @@ index 82c12e26..e9d2294c 100644
      #[cfg(not(feature = "parallel"))]
      let iter = values.chunks_mut(NUMERATORS_CHUNK_SIZE);
  
-@@ -225,63 +323,65 @@ fn accumulate_numerators_on_subdomain(
+@@ -225,63 +321,65 @@ fn accumulate_numerators_on_subdomain(
  
      iter.enumerate().for_each(|(chunk_idx, mut values_dst)| {
          let chunk_start = chunk_idx * NUMERATORS_CHUNK_SIZE;
@@ -6397,7 +6419,7 @@ index 377f2c6a..21085044 100644
      info!(proof_size_estimate = proof.size_estimate());
  
 diff --git a/crates/stwo/src/prover/pcs/mod.rs b/crates/stwo/src/prover/pcs/mod.rs
-index 9b04df7a..710b9525 100644
+index 9b04df7a..ede2db7b 100644
 --- a/crates/stwo/src/prover/pcs/mod.rs
 +++ b/crates/stwo/src/prover/pcs/mod.rs
 @@ -1,3 +1,5 @@
@@ -7319,7 +7341,7 @@ index 9b04df7a..710b9525 100644
 +                .collect_vec()
 +        };
 +        // TILE evaluates a striped column's non-resident rows straight from its
-+        // stripe 0 (TILE, with the Q722 weighted-sum tail), without regrowing its coefficients.
++        // stripe 0 (TILE, with the weighted-sum tail), without regrowing its coefficients.
 +        // The rows of `positions` in one column, read from its stripes as the tree lifts them.
 +        let read_rows = |poly: &Poly<B>| -> Vec<BaseField> {
 +            if poly.coeffs.is_none()

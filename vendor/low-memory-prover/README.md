@@ -105,12 +105,21 @@ their witness hash maps retain randomized hashing for transaction-derived keys.
 - **Linux paths are untested.** Measurements are from macOS; part of
   `LargeBlockCache` (`madvise`, `malloc_trim`, zero-page reuse) only runs on
   Linux. Run the deps smoke test and a live prove on linux-x86_64 before
-  releasing; if in doubt, build with the feature off.
+  releasing; if in doubt, build with the feature off. The `madvise` ranges use
+  the kernel's page size (`sysconf`), not a fixed 4 KiB, so that 16 KiB and
+  64 KiB aarch64 kernels do not have bytes past a buffer zeroed; linux-arm64 is
+  still unmeasured.
 - **Review.** About 7,000 lines of prover code from the provably.fast
   competition, written by several contributors and agents, adapted for these
   pins. Byte-identical proofs show it proves the same thing; they do not review
   what else the code does. The prover runs with the user's viewing key in its
-  input.
+  input. A static review of every `unsafe` site in `stwo.patch` (2026-10-27)
+  found nothing reachable from a transaction; it led to the page-size fix above
+  and a length check on pooled buffers before the out-of-place iFFT writes into
+  them. Open items for a stwo maintainer: safe public APIs that rely on
+  unchecked lengths (`Column::grow`, `BaseColumnPool::give_back`,
+  `barycentric_weights_into`, striped `Poly.evals` read by
+  `SimdDomainEvaluator`), and the global allocator living in a library crate.
 
 ## Regenerating
 
