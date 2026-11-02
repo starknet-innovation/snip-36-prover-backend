@@ -36,3 +36,6 @@ dist/
 # Scarb build artifacts
 tests/contracts/target/
 .DS_Store
+
+# Low-memory prover check fixtures (test-mnemonic STRK20 transactions).
+!vendor/low-memory-prover/check/fixtures/*.pie.zip

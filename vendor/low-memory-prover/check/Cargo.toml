@@ -1,0 +1,14 @@
+# Proves the fixture PIEs with privacy_prove::privacy_recursive_prove. Not part of
+# the snip36 workspace: scripts/check-low-memory-prover.sh builds it against the
+# patched trees in deps/low-memory-prover (it appends their [patch] sections).
+[package]
+name = "low-memory-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+privacy-prove = { git = "https://github.com/starkware-libs/proving-utils", rev = "3035dd00421daa541894297bd754db6e2787807b" }
+cairo-vm = { version = "=3.2.0" }

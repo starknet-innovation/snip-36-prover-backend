@@ -98,6 +98,8 @@ snip36 setup
 
 This clones the sequencer and proving-utils repos, installs the nightly Rust toolchain, builds the runner and prover binaries, and creates the Python venv for `cairo-compile`.
 
+The pinned V2 runner uses the **upstream prover**. The vendored [low-memory patches](vendor/low-memory-prover/README.md) support the older V1 stack only; setup selects by the locked `privacy-prove` source and does not apply those patches to V2. The V1 measurements (~14 GB down to ~2–3 GB) do not apply to V2. `snip36 setup --stock-prover` explicitly selects upstream for source builds.
+
 ### 3. Configure environment
 
 ```bash
