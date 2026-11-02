@@ -177,7 +177,7 @@ else
   echo "WARNING: sequencer repo not cloned — cairo-compile not installed."
   echo "You may need to clone the sequencer for the Python venv:"
   echo "  git clone https://github.com/starkware-libs/sequencer.git deps/sequencer"
-  echo "  git -C deps/sequencer checkout 0ee373ac5f50d475ab0efd59edbda4a9215c12cf"
+  echo "  git -C deps/sequencer checkout 148de44521b49e32c5a675e287572768932cc99e"
   echo "  sequencer_venv/bin/pip install -r deps/sequencer/scripts/requirements.txt"
 fi
 
