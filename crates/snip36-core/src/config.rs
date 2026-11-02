@@ -116,7 +116,7 @@ impl Config {
 
     /// Root for compiler sidecar binaries used by the sequencer runner.
     ///
-    /// Sequencer v0.14.3 resolves `starknet-sierra-compile` from
+    /// Sequencer v0.14.4 resolves `starknet-sierra-compile` from
     /// `$CARGO_TOOLS_ROOT/<binary>-<version>/bin/<binary>`. Keep this under
     /// `deps/` so prebuilt bundles are relocatable and do not depend on the
     /// user's global cargo home.

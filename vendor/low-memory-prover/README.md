@@ -1,7 +1,13 @@
 # Low-memory prover
 
-Patches that `snip36 setup` (source build) applies to the stwo stack the
-sequencer pins before building `starknet_transaction_prover`. They carry the
+Patches for the older V1 prover. The current V2 sequencer uses upstream
+`privacy-prove` at `e0035ffc`; setup does not apply these patches to it.
+Porting the memory optimizations to V2 requires new patches and byte-for-byte
+proof validation against that revision; the V1 measurements below do not establish
+V2 memory usage.
+
+On a supported V1 stack, `snip36 setup` applies these patches before building
+`starknet_transaction_prover`. They carry the
 [provably.fast](https://stwo.provably.fast/) memory frontier
 (`starknet-innovation/proving`, branch `provably-fast-frontier`, commit
 `77964886`, base `dd1787bc`) back onto the older revisions the sequencer uses.
@@ -16,10 +22,13 @@ They change how the prover schedules and frees memory, never what it proves:
 | `stwo-circuits.patch` | starkware-libs/stwo-circuits `5ef951a1` | 21 (compact preprocessed columns, per-proof value release after the base trace, witness) |
 | `proving-utils.patch` | starkware-libs/proving-utils `3035dd00` | 4 (`privacy_prove`: lazy precomputes, allocator, ordering) |
 
-These are the revisions `SEQUENCER_TAG` pins in its `Cargo.lock` (both
-`9f78ee7c`, used by v1.2.2, and the current `e6b6fd2e`). Setup checks this and
-refuses to build if a sequencer bump moves any of them; `--stock-prover` builds
-the unpatched prover instead.
+These revisions belong to the V1 sequencers `9f78ee7c` (v1.2.2) and
+`e6b6fd2e`. Setup first identifies the actual `privacy-prove` package source,
+then checks the exact V1 patch revisions. This matters because the V2 lockfile
+also contains old V1 verifier dependencies. Known V2 uses upstream automatically;
+unknown prover revisions fail with guidance to review compatibility or explicitly
+use `--stock-prover`. Setup restores the sequencer manifest before selecting a
+mode, so switching away from V1 removes any stale patch sections.
 
 ## Measurements
 
@@ -75,7 +84,8 @@ The fixed branch has not had a live Sepolia prove and submission.
 
 ## Checking it on a machine
 
-After `snip36 setup` (source build), `scripts/check-low-memory-prover.sh`
+For a supported V1 sequencer, after `snip36 setup` (source build),
+`scripts/check-low-memory-prover.sh`
 builds `check/` against the patched trees, proves the two fixture PIEs
 (`check/fixtures/`, STRK20 Sepolia transactions from the published all-`abandon`
 test mnemonic, never real keys), requires the unpatched prover's exact bytes
