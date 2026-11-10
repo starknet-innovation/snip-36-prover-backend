@@ -97,6 +97,7 @@ pub struct E2eCoinflipArgs {
 }
 
 pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> Result<()> {
+    let bet = crate::input::validate_bet(args.bet).map_err(|e| eyre::eyre!(e))?;
     let config = Config::from_env(env_file)?;
 
     PASS_COUNT.store(0, Ordering::Relaxed);
@@ -111,7 +112,6 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
 
     let rpc = StarknetRpc::new(&config.rpc_url);
     let account_name = "e2e-test-account-2";
-    let bet = args.bet.min(1); // clamp to 0 or 1
 
     info!("=== SNIP-36 CoinFlip E2E Test ===");
     info!("");

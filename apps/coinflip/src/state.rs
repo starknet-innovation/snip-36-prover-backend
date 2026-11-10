@@ -39,7 +39,7 @@ pub struct PersistedDeployments {
 pub struct BetCommitment {
     /// pedersen(bet, nonce) — computed by the player
     pub commitment: String,
-    /// Block number locked at commit time (used as seed)
+    /// Block number locked after deposit matching (predictable demo seed)
     pub seed_block: u64,
     /// Player address
     pub player: String,

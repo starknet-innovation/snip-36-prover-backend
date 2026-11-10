@@ -13,6 +13,7 @@ const SNCAST_L2_GAS: u64 = 33_554_432;
 const SNCAST_L1_DATA_GAS: u64 = 432;
 const SNCAST_GAS_PRICE_MULTIPLIER: u128 = 2;
 const SNCAST_RETRY_ATTEMPTS: u32 = 4;
+const _: () = assert!(SNCAST_RETRY_ATTEMPTS > 0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SncastFailureKind {
@@ -93,7 +94,8 @@ where
             return Ok(output);
         }
 
-        let delay = Duration::from_secs(5 * attempt as u64);
+        // Deliberately bounded linear delays: 5s, 10s, 15s (four attempts total).
+        let delay = Duration::from_secs(5 * u64::from(attempt));
         info!(
             "  {operation} attempt {attempt}/{SNCAST_RETRY_ATTEMPTS} hit a transient RPC/provider response; retrying in {}s...",
             delay.as_secs()
@@ -108,7 +110,9 @@ where
         tokio::time::sleep(delay).await;
     }
 
-    unreachable!("sncast retry loop always returns from inside the loop")
+    Err(std::io::Error::other(
+        "sncast retry loop completed without output",
+    ))
 }
 
 /// Extract a hex value (0x...) from text after a flexible key match.

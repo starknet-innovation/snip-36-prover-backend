@@ -24,3 +24,4 @@ regex-lite = { version = "0.1", optional = true }
 
 [dev-dependencies]
 starknet-rust-core = "0.20.0"
+tempfile = "3"

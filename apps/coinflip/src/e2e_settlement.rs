@@ -88,11 +88,17 @@ pub struct E2eSettlementArgs {
 
     /// Bet amount in STRK (e.g. 0.001)
     #[arg(long, default_value = "0.001")]
-    pub bet_amount: f64,
+    pub bet_amount: crate::input::StrkAmount,
 }
 
 pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) -> Result<()> {
+    let bet = crate::input::validate_bet(args.bet).map_err(|e| eyre::eyre!(e))?;
     let config = Config::from_env(env_file)?;
+    let gateway_submit_url = if args.prove_only {
+        None
+    } else {
+        Some(config.gateway_submit_url()?)
+    };
 
     PASS_COUNT.store(0, Ordering::Relaxed);
     FAIL_COUNT.store(0, Ordering::Relaxed);
@@ -106,8 +112,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
 
     let rpc = StarknetRpc::new(&config.rpc_url);
     let account_name = "playground-master";
-    let bet = args.bet.min(1);
-    let bet_amount_wei: u128 = (args.bet_amount * 1e18) as u128;
+    let bet_amount_wei = args.bet_amount.wei();
 
     info!("=== SNIP-36 Settlement E2E Test ===");
     info!("");
@@ -506,17 +511,15 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
             &tx_hash_hex[..18.min(tx_hash_hex.len())]
         );
 
-        let gateway_url = config.gateway_url.as_deref().unwrap_or("");
-        let submit_url = format!(
-            "{}/gateway/add_transaction",
-            gateway_url.trim_end_matches('/')
-        );
+        let submit_url = gateway_submit_url
+            .as_deref()
+            .ok_or_else(|| eyre::eyre!("STARKNET_GATEWAY_URL is required for submission"))?;
 
         let client = reqwest::Client::new();
         let mut accepted = false;
         for attempt in 1..=20 {
             match client
-                .post(&submit_url)
+                .post(submit_url)
                 .json(&invoke_tx)
                 .timeout(std::time::Duration::from_secs(120))
                 .send()

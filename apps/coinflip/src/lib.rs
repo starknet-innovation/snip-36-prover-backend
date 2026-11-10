@@ -1,5 +1,6 @@
 pub mod e2e;
 pub mod e2e_settlement;
+pub mod input;
 pub mod outcome;
 pub mod routes;
 pub mod selectors;

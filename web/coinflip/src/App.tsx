@@ -117,10 +117,9 @@ function HowItWorks() {
               <div>
                 <div style={labelStyle}>Lock seed (server)</div>
                 <div style={descStyle}>
-                  The server records the current Starknet block number as the
-                  seed. This happens <em>after</em> your commitment is locked, so the
-                  server cannot pick a block that favors a particular outcome —
-                  it doesn't know your bet yet.
+                  After matching the deposit, the server uses the confirmed block
+                  number as a deterministic seed. Block numbers are predictable;
+                  deposit timing can influence the outcome.
                 </div>
               </div>
             </div>
@@ -181,8 +180,7 @@ function HowItWorks() {
                 <div style={descStyle}>
                   The STARK proof and proof_facts are submitted as a
                   proof-bearing transaction to Starknet. The on-chain verifier
-                  confirms the proof is valid — guaranteeing the game was played
-                  honestly.
+                  verifies the contract execution for the supplied inputs.
                 </div>
               </div>
             </div>
@@ -196,17 +194,16 @@ function HowItWorks() {
             }}
           >
             <div style={{ ...labelStyle, color: "#ffd700" }}>
-              Why can't anyone cheat?
+              What the proof verifies
             </div>
             <div style={descStyle}>
               <strong style={{ color: "#ccc" }}>Player</strong>: Your bet is
               committed before the seed is revealed. You cannot change it after
-              seeing the outcome.
+              seeing the outcome, but you may still withhold the reveal.
               <br />
               <strong style={{ color: "#ccc" }}>Server</strong>: The seed is
-              locked after your commitment. It cannot pick a favorable block.
-              The STARK proof guarantees the contract was executed correctly — a
-              fake outcome would produce an invalid proof.
+              a predictable block number. The proof verifies execution; it does
+              not guarantee unbiased seed selection or force either party to finish.
               <br />
               <strong style={{ color: "#ccc" }}>Anyone</strong>: Given the seed
               (block number) and player address, anyone can compute{" "}
@@ -366,7 +363,7 @@ export default function App() {
         ...s,
         logs: [
           ...s.logs,
-          `Seed locked at block ${commitResp.seed_block} (commit-reveal: server cannot change seed)`,
+          `Seed locked at block ${commitResp.seed_block} (deterministic demo seed)`,
         ],
       }));
     } catch (e) {
@@ -517,6 +514,10 @@ export default function App() {
         </div>
       )}
 
+      <p style={{ color: "#aaa", fontSize: 12, marginTop: 16 }}>
+        Deterministic demo: predictable seeds and withheld reveals can influence results.
+        This is not a fair-wagering protocol.
+      </p>
       {!state.address ? (
         <div style={{ marginTop: 80 }}>
           <CoinDisplay side={null} spinning={false} />
@@ -524,7 +525,7 @@ export default function App() {
             Connect your Starknet wallet to play
           </p>
           <p style={{ marginTop: 8, color: "#666", fontSize: 12 }}>
-            Provably fair coin flip powered by SNIP-36 virtual blocks
+            Provable coin-flip execution powered by SNIP-36 virtual blocks
           </p>
 
           {/* How it works — always visible before connect */}
