@@ -1,4 +1,5 @@
 name: Daily Sepolia Health Check
+run-name: Release v1.4.1 E2E (${{ inputs.network }})
 
 on:
   schedule:
@@ -94,9 +95,21 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build snip36 CLI
+      # Test the published release artifact rather than rebuilding its source.
+      - name: Install published v1.4.1 CLI (verify checksum)
         if: env.RUN_E2E == 'true'
-        run: cargo build --release -p snip36-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts target/release
+          gh release download v1.4.1 --repo "${{ github.repository }}" \
+            --pattern snip36-linux-x86_64.tar.gz --pattern SHA256SUMS \
+            --dir release-artifacts
+          (cd release-artifacts && grep '  snip36-linux-x86_64.tar.gz$' SHA256SUMS | sha256sum -c -)
+          tar xzf release-artifacts/snip36-linux-x86_64.tar.gz -C target/release
+          test -x target/release/snip36
+          sha256sum target/release/snip36
 
       - name: Install starknet-foundry (sncast)
         if: env.RUN_E2E == 'true'
