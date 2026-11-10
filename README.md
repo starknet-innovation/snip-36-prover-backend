@@ -59,6 +59,19 @@ older image tags from before that switch may be amd64-only.
 > `curl` / `download-deps.sh`) carry the Gatekeeper quarantine attribute.
 > Clear it with `xattr -dr com.apple.quarantine <path>`.
 
+## v1.4.1 live network validation
+
+On 2026-11-10, the published `v1.4.1` Linux x86-64 CLI, with `deps-v15`, passed the counter (`snip36 e2e`) and L2→L1 messages (`snip36 e2e-messages`) tests on both networks. The downloaded CLI archive checksum was verified, and the binary used in both runs matched the published release binary byte-for-byte.
+
+| Network | Result / run | Counter inclusion block | Messages inclusion block |
+|---------|--------------|-------------------------|--------------------------|
+| Starknet Sepolia (`SN_SEPOLIA`) | [Passed](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/42895116207) | 17945600 | 17945639 |
+| Starknet Mainnet (`SN_MAIN`) | [Passed](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/42895121399) | 17763366 | 17763417 |
+
+Both runs verified virtual execution, proof generation, proof-bearing transaction submission and on-chain inclusion, counter state changes, and L2→L1 message output. The counter proof's virtual-OS program hash matched `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`.
+
+These runs cover the counter and messages flows; CoinFlip settlement and wagering fairness are outside this live validation.
+
 ## Quick Start
 
 ### 1. Build the CLI
