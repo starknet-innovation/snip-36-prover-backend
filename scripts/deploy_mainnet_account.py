@@ -15,7 +15,6 @@ from starknet_py.hash.utils import private_to_stark_key
 from starknet_py.net.account.account import Account
 from starknet_py.net.client_models import Call
 from starknet_py.net.full_node_client import FullNodeClient
-from starknet_py.net.models import StarknetChainId
 from starknet_py.net.signer.stark_curve_signer import KeyPair
 
 OZ_CLASS_HASH = 0x05B4B537EAA2399E3AA99C4E2E0208EBD6C71BC1467938CD52C798C601E43564

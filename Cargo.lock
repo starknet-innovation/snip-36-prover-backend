@@ -2326,6 +2326,7 @@ dependencies = [
  "starknet-rust-core",
  "starknet-rust-crypto",
  "starknet-types-core",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

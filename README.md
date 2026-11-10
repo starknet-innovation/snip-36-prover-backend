@@ -346,6 +346,8 @@ snip36 e2e-coinflip --env-file .env --bet 1 --prove-only
 
 The test deploys the CoinFlip contract, proves a round, and verifies the settlement message matches the expected Pedersen hash computation client-side.
 
+This is a deterministic execution demo, not a fair-wagering protocol. Its block-number seed is predictable and deposit timing can influence outcomes. Players can withhold reveals, and the bank owner supplies the settlement seed. A proof verifies execution for the supplied inputs; it does not establish unbiased randomness or force completion. Fair wagering would require independently verifiable randomness, binding settlement to that seed, and reveal deadlines with enforceable forfeitures.
+
 ## Project Structure
 
 ```

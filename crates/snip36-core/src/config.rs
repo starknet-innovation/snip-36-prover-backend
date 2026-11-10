@@ -103,15 +103,31 @@ impl Config {
     /// for the "not found" error path.
     pub fn runner_bin(&self) -> PathBuf {
         let release = self.deps_dir.join("sequencer/target/release");
-        let os_runner = release.join("starknet_os_runner");
-        if os_runner.exists() {
-            return os_runner;
-        }
         let tx_prover = release.join("starknet_transaction_prover");
         if tx_prover.exists() {
             return tx_prover;
         }
-        os_runner
+        release.join("starknet_os_runner")
+    }
+
+    /// Validated gateway endpoint for proof submission. Keep access parameters out of errors.
+    pub fn gateway_submit_url(&self) -> Result<String, ConfigError> {
+        let gateway = self
+            .gateway_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .ok_or(ConfigError::Missing("STARKNET_GATEWAY_URL"))?;
+        let mut url = reqwest::Url::parse(gateway).map_err(|_| ConfigError::InvalidGatewayUrl)?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(ConfigError::InvalidGatewayUrl);
+        }
+        url.set_path(&format!(
+            "{}/gateway/add_transaction",
+            url.path().trim_end_matches('/')
+        ));
+        url.set_fragment(None);
+        Ok(url.to_string())
     }
 
     /// Root for compiler sidecar binaries used by the sequencer runner.
@@ -171,4 +187,58 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("invalid chain_id: {0}")]
     InvalidChainId(String),
+    #[error("STARKNET_GATEWAY_URL must be an absolute HTTP(S) URL")]
+    InvalidGatewayUrl,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(root: &Path) -> Config {
+        Config {
+            rpc_url: "http://localhost:1".into(),
+            account_address: "0x1".into(),
+            private_key: "0x1".into(),
+            chain_id: "SN_SEPOLIA".into(),
+            gateway_url: None,
+            strk_token: "0x1".into(),
+            project_dir: root.into(),
+            output_dir: root.join("output"),
+            deps_dir: root.join("deps"),
+        }
+    }
+
+    #[test]
+    fn canonical_runner_takes_precedence_over_stale_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        let alias = config.runner_bin();
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::fs::write(&alias, b"old").unwrap();
+        assert_eq!(config.runner_bin(), alias);
+        let canonical = alias.with_file_name("starknet_transaction_prover");
+        std::fs::write(&canonical, b"new").unwrap();
+        assert_eq!(config.runner_bin(), canonical);
+        std::fs::remove_file(alias).unwrap();
+        assert_eq!(config.runner_bin(), canonical);
+    }
+
+    #[test]
+    fn gateway_is_required_and_must_be_absolute_http() {
+        let mut config = config(Path::new("."));
+        assert!(matches!(
+            config.gateway_submit_url(),
+            Err(ConfigError::Missing(_))
+        ));
+        for invalid in ["", "  ", "/gateway", "ftp://example.com"] {
+            config.gateway_url = Some(invalid.into());
+            assert!(config.gateway_submit_url().is_err());
+        }
+        config.gateway_url = Some("https://example.com/base/?key=test#fragment".into());
+        assert_eq!(
+            config.gateway_submit_url().unwrap(),
+            "https://example.com/base/gateway/add_transaction?key=test"
+        );
+    }
 }

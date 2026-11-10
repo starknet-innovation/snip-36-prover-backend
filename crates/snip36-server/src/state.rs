@@ -14,6 +14,11 @@ pub fn canonical_session_id(session_id: &str) -> Result<String, String> {
         .map_err(|_| "session_id must be a UUID".to_string())
 }
 
+/// Encode a validated session UUID as a felt-sized hexadecimal string.
+pub fn session_id_to_felt(session_id: &str) -> Result<String, String> {
+    canonical_session_id(session_id).map(|id| format!("0x{}", id.replace('-', "")))
+}
+
 /// Shared application state for generic SNIP-36 routes.
 ///
 /// Application-specific state (e.g. CoinFlip deployments) lives in app crates
@@ -54,7 +59,19 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_session_id;
+    use super::{canonical_session_id, session_id_to_felt};
+
+    #[test]
+    fn session_felt_uses_canonical_uuid_bytes() {
+        let expected = "0x9d5e8f21f7e34ad49f0a695991551ead";
+        for id in [
+            "9d5e8f21-f7e3-4ad4-9f0a-695991551ead",
+            "9D5E8F21F7E34AD49F0A695991551EAD",
+        ] {
+            assert_eq!(session_id_to_felt(id).unwrap(), expected);
+        }
+        assert!(session_id_to_felt("../../output").is_err());
+    }
 
     #[test]
     fn canonical_session_id_rejects_path_like_values() {

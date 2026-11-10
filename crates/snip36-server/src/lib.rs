@@ -7,4 +7,4 @@
 pub mod routes;
 pub mod state;
 
-pub use state::{canonical_session_id, AppState};
+pub use state::{canonical_session_id, session_id_to_felt, AppState};

@@ -22,9 +22,9 @@ use tracing::info;
 
 use crate::state::{BetCommitment, CoinFlipAppState, CoinFlipDeployment};
 
-use snip36_server::canonical_session_id;
 use snip36_server::routes::fund::error_response;
 use snip36_server::routes::prove_block::find_snip36_bin;
+use snip36_server::{canonical_session_id, session_id_to_felt};
 
 // ── Status ───────────────────────────────────────────────
 
@@ -227,7 +227,8 @@ pub async fn commit_bet(
     Json(req): Json<CommitRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let session_id = uuid::Uuid::new_v4().to_string();
-    let session_felt = format!("0x{}", session_id.replace('-', ""));
+    let session_felt = session_id_to_felt(&session_id)
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     state.commitments.insert(
         session_id.clone(),
@@ -274,6 +275,8 @@ pub async fn play_coinflip(
     Path(session_id): Path<String>,
     Query(params): Query<PlayQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let bet = crate::input::validate_bet(params.bet)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, e))?;
     let session_id = canonical_session_id(&session_id)
         .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e))?;
     let deployment = {
@@ -285,6 +288,12 @@ pub async fn play_coinflip(
             )
         })?
     };
+
+    let submit_url = state
+        .app
+        .config
+        .gateway_submit_url()
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Retrieve and consume the commitment
     let commitment = state
@@ -298,7 +307,6 @@ pub async fn play_coinflip(
             )
         })?;
 
-    let bet = params.bet.min(1);
     let player = params.player.clone();
 
     // Verify player matches
@@ -326,8 +334,10 @@ pub async fn play_coinflip(
         ));
     }
 
-    // Use the seed_block locked at commit time
+    // Deterministic demo seed, locked after matching the deposit. This is not unbiased entropy.
+    // The commitment hides the bet; the nonce does not supply randomness to play/settle.
     let seed_block = commitment.seed_block;
+    let session_felt = commitment.session_felt.clone();
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     let state = Arc::clone(&state);
@@ -687,16 +697,6 @@ pub async fn play_coinflip(
         let payload = to_gateway_payload(payload);
 
         let gw_tx_hash_hex = format!("{:#x}", gw_tx_hash);
-        let submit_url = format!(
-            "{}/gateway/add_transaction",
-            state
-                .app
-                .config
-                .gateway_url
-                .as_deref()
-                .unwrap_or("")
-                .trim_end_matches('/')
-        );
 
         send(
             "log",
@@ -793,7 +793,6 @@ pub async fn play_coinflip(
             send("phase", "settling").await;
             send("log", "Settling on-chain...").await;
 
-            let session_felt = format!("0x{}", session_id.replace('-', ""));
             let settle_calldata = format!("{} {}", session_felt, seed);
 
             match sncast_invoke(&state, &bank_address, "settle", &settle_calldata).await {
@@ -1042,7 +1041,7 @@ pub async fn deploy_bank(
 #[derive(Deserialize)]
 pub struct DepositInfoRequest {
     pub session_id: String,
-    pub bet_amount: f64,
+    pub bet_amount: crate::input::StrkAmount,
 }
 
 #[derive(Serialize)]
@@ -1074,7 +1073,7 @@ pub async fn deposit_info(
         .get(&req.session_id)
         .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "No commitment for this session"))?;
 
-    let amount_wei = (req.bet_amount * 1e18) as u128;
+    let amount_wei = req.bet_amount.wei();
     let amount_low = format!("{:#x}", amount_wei);
     let amount_high = "0x0".to_string();
 
@@ -1395,4 +1394,67 @@ pub fn coinflip_routes(app: std::sync::Arc<snip36_server::AppState>) -> Router<(
         .route("/api/coinflip/balance/{address}", get(player_balance))
         .route("/api/coinflip/winnings/{address}", get(player_winnings))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod input_regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn invalid_bet_and_missing_gateway_preserve_commitment() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = snip36_core::Config {
+            rpc_url: "http://localhost:1".into(),
+            account_address: "0x1".into(),
+            private_key: "0x1".into(),
+            chain_id: "SN_SEPOLIA".into(),
+            gateway_url: None,
+            strk_token: "0x1".into(),
+            project_dir: dir.path().into(),
+            output_dir: dir.path().join("output"),
+            deps_dir: dir.path().join("deps"),
+        };
+        let state = Arc::new(CoinFlipAppState::new(Arc::new(
+            snip36_server::AppState::new(config),
+        )));
+        *state.coinflip.write().await = Some(crate::state::CoinFlipDeployment {
+            contract_address: "0x1".into(),
+            class_hash: "0x1".into(),
+            deploy_block: 1,
+        });
+        let id = "9d5e8f21-f7e3-4ad4-9f0a-695991551ead";
+        state.commitments.insert(
+            id.into(),
+            crate::state::BetCommitment {
+                commitment: "0x1".into(),
+                seed_block: 1,
+                player: "0x1".into(),
+                bet_amount: None,
+                session_felt: "0x1".into(),
+            },
+        );
+        for (bet, status, message) in [
+            (2, StatusCode::BAD_REQUEST, "bet must be"),
+            (0, StatusCode::INTERNAL_SERVER_ERROR, "STARKNET_GATEWAY_URL"),
+        ] {
+            let result = play_coinflip(
+                State(state.clone()),
+                Path(id.into()),
+                Query(PlayQuery {
+                    player: "0x1".into(),
+                    bet,
+                    nonce: "0x1".into(),
+                }),
+            )
+            .await;
+            match result {
+                Err((actual, body)) => {
+                    assert_eq!(actual, status);
+                    assert!(body.0.to_string().contains(message));
+                }
+                Ok(_) => panic!("invalid request unexpectedly started proving"),
+            }
+            assert!(state.commitments.contains_key(id));
+        }
+    }
 }
