@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 env:
-  SEQUENCER_TAG: e6b6fd2e9932909107833579e5b6efd6c75fa0af
+  SEQUENCER_TAG: 148de44521b49e32c5a675e287572768932cc99e
   PROVING_UTILS_REV: 0a97f45a15809e7b5a821b7adc49212af7b399f1
   STWO_NIGHTLY: nightly-2026-01-15
 
@@ -172,7 +172,7 @@ jobs:
           cp "$RUNNER_BIN" dist/starknet_transaction_prover
           cp "$RUNNER_BIN" dist/starknet_os_runner
 
-          # Sequencer v0.14.3 resolves starknet-sierra-compile from
+          # Sequencer v0.14.4 resolves starknet-sierra-compile from
           # CARGO_TOOLS_ROOT at runtime. Ship the project-local tools root so
           # release binaries are relocatable and do not depend on CI paths.
           cp -a deps/compiler-tools dist/
@@ -338,7 +338,7 @@ jobs:
             - sequencer: `${{ env.SEQUENCER_TAG }}`
             - proving-utils: `${{ env.PROVING_UTILS_REV }}`
             - Rust nightly: `${{ env.STWO_NIGHTLY }}`
-            - low-memory prover: `${{ hashFiles('vendor/low-memory-prover/*.patch') }}` (vendor/low-memory-prover, applied by `snip36 setup`)
+            - prover memory mode: upstream V2 (vendored V1 low-memory patches are not applied)
 
             **Usage:**
             ```bash

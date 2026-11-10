@@ -98,7 +98,7 @@ snip36 setup
 
 This clones the sequencer and proving-utils repos, installs the nightly Rust toolchain, builds the runner and prover binaries, and creates the Python venv for `cairo-compile`.
 
-The runner is built with the **low-memory prover** ([`vendor/low-memory-prover`](vendor/low-memory-prover/README.md)): the provably.fast memory frontier backported onto the pinned stwo stack. Proofs are byte-identical; peak memory for a privacy-pool proof drops from ~14 GB to ~2–3 GB. `snip36 setup --stock-prover` builds the unpatched prover, and `scripts/check-low-memory-prover.sh` checks the patched one on this machine (exact proof bytes, peak memory).
+The pinned V2 runner uses the **upstream prover**. The vendored [low-memory patches](vendor/low-memory-prover/README.md) support the older V1 stack only; setup selects by the locked `privacy-prove` source and does not apply those patches to V2. The V1 measurements (~14 GB down to ~2–3 GB) do not apply to V2. `snip36 setup --stock-prover` explicitly selects upstream for source builds.
 
 ### 3. Configure environment
 
@@ -374,7 +374,7 @@ snip-36-prover-backend/
 
 ## Key Dependencies
 
-- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `PRIVACY-0.14.3-RC.2` / `e6b6fd2` — Virtual OS transaction prover (`starknet_transaction_prover`); program hash `0x53f6c9fcfd31d27279ff7d7e422b44623550a732b59fe193354a7316a96daa1`
+- [starkware-libs/sequencer](https://github.com/starkware-libs/sequencer) @ `main-v0.14.4` / `148de4452` — Virtual OS transaction prover (`starknet_transaction_prover`); program hash `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`
 - [starkware-libs/proving-utils](https://github.com/starkware-libs/proving-utils) @ `0a97f45` — stwo-run-and-prove binary
 - [starkware-libs/stwo](https://github.com/starkware-libs/stwo) crate `2.2.0` @ `5ea05973` (via the pinned proving-utils lockfile) — Circle STARK prover
 - [starknet-rust-crypto](https://crates.io/crates/starknet-rust-crypto) @ `0.19.1` — Poseidon hash, ECDSA signing

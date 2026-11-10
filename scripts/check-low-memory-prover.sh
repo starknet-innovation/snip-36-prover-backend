@@ -16,7 +16,7 @@ NIGHTLY="nightly-2026-01-15"
 MARKER="# snip36: low-memory prover"
 
 grep -q "$MARKER" "$DEPS/sequencer/Cargo.toml" 2>/dev/null || {
-  echo "error: $DEPS/sequencer/Cargo.toml has no low-memory prover section; run snip36 setup first" >&2
+  echo "error: $DEPS/sequencer/Cargo.toml has no low-memory prover section; this check requires a supported patched V1 build (V2 uses upstream)" >&2
   exit 1
 }
 

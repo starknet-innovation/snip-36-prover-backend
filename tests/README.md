@@ -95,7 +95,7 @@ The pinned transaction prover + stwo prover outputs proofs in **binary format**
 3. The proof is returned as a base64 string in the JSON-RPC response
 
 The `proof_facts` are a JSON array of hex felt values containing:
-- `PROOF0` marker
+- `PROOF2` marker
 - `VIRTUAL_SNOS` marker
 - Virtual OS program hash
 - `VIRTUAL_SNOS0` marker

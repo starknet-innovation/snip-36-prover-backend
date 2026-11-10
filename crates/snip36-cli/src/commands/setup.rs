@@ -11,7 +11,7 @@ use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
 const PROVING_UTILS_VERSION: &str = "0a97f45a15809e7b5a821b7adc49212af7b399f1";
-const SEQUENCER_TAG: &str = "e6b6fd2e9932909107833579e5b6efd6c75fa0af";
+const SEQUENCER_TAG: &str = "148de44521b49e32c5a675e287572768932cc99e";
 const STWO_NIGHTLY: &str = "nightly-2026-01-15";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
@@ -28,8 +28,8 @@ const PROVING_UTILS_LOCKFILE: &[u8] = include_bytes!("../../../../vendor/proving
 
 /// The low-memory prover: the provably.fast memory frontier (starknet-innovation/proving
 /// 77964886) backported onto the stwo stack SEQUENCER_TAG pins. It changes how the prover
-/// schedules and frees memory, not what it proves: proofs are byte-identical to the unpatched
-/// stack's, at roughly a sixth of the peak memory. See vendor/low-memory-prover/README.md.
+/// schedules and frees memory for the V1 prover. These patches have not been ported to V2;
+/// that stack uses its upstream prover. See vendor/low-memory-prover/README.md.
 ///
 /// (repo, clone URL, the commit the sequencer's Cargo.lock pins, patch, [patch] entries: package
 /// name and its path inside the repo).
@@ -120,8 +120,7 @@ pub struct SetupArgs {
     #[arg(long)]
     skip_runner: bool,
 
-    /// Build starknet_transaction_prover on the unpatched upstream prover instead of the
-    /// low-memory one (vendor/low-memory-prover). Proofs are the same either way.
+    /// Force the unpatched upstream prover (already the default for the supported V2 stack).
     #[arg(long)]
     stock_prover: bool,
 }
@@ -228,12 +227,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     .await?;
 
     info!("  Checking out {SEQUENCER_TAG}...");
-    run_cmd_in(
-        "git",
-        &["checkout", SEQUENCER_TAG, "--quiet"],
-        &sequencer_dir,
-    )
-    .await?;
+    checkout_sequencer(&sequencer_dir, SEQUENCER_TAG).await?;
 
     // Apply macOS RLIMIT_AS patch
     apply_macos_patch(&sequencer_dir).await?;
@@ -686,7 +680,7 @@ async fn ensure_venv(project_dir: &Path, requirements: &Path) -> Result<std::pat
 }
 
 /// Install the sequencer's Sierra compiler sidecar into a project-local cargo
-/// tools root. Sequencer v0.14.3 resolves this path at runtime from
+/// tools root. Sequencer v0.14.4 resolves this path at runtime from
 /// CARGO_TOOLS_ROOT instead of from a compile-time OUT_DIR.
 async fn install_sierra_compiler(sequencer_dir: &Path, compiler_tools_dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(compiler_tools_dir).await?;
@@ -790,7 +784,7 @@ async fn layout_prebuilt(deps_dir: &Path) -> Result<()> {
         tokio::fs::copy(&os_runner, &tx_prover).await?;
     }
 
-    // deps-v5+ tarballs ship the v0.14.3 compiler sidecar in the versioned
+    // deps-v5+ tarballs ship the compiler sidecar in the versioned
     // CARGO_TOOLS_ROOT layout expected by the runner at runtime.
     let compiler_tools_src = bin_dir.join("compiler-tools");
     let compiler_tools_dst = deps_dir.join("compiler-tools");
@@ -962,13 +956,85 @@ fn extract_channel(toml_content: &str) -> Option<String> {
     None
 }
 
-/// Point the sequencer's prover dependencies at patched checkouts of the pinned stwo stack (see
-/// [`LOW_MEMORY_PROVER`]), or restore the upstream ones when `stock` is set.
+#[derive(Debug, PartialEq, Eq)]
+enum ProverMemoryMode {
+    PatchedV1,
+    UpstreamV2,
+}
+
+fn prover_memory_mode(lock: &str) -> Result<ProverMemoryMode> {
+    // V2 also depends on the V1 verifier: finding the old revisions anywhere in the lockfile
+    // does not establish which prover is used. Select the actual privacy-prove package first.
+    let packages: Vec<_> = lock
+        .split("[[package]]")
+        .filter(|package| {
+            package
+                .lines()
+                .any(|line| line.trim() == "name = \"privacy-prove\"")
+        })
+        .collect();
+    let [package] = packages.as_slice() else {
+        bail!("expected exactly one privacy-prove package in sequencer Cargo.lock");
+    };
+    let source = package
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("source = \"")?.strip_suffix('"'))
+        .ok_or_else(|| eyre::eyre!("privacy-prove has no git source in sequencer Cargo.lock"))?;
+    if source == "git+https://github.com/starkware-libs/proving?rev=e0035ffc8e08da270b8cb4a71f3708af70c2c775#e0035ffc8e08da270b8cb4a71f3708af70c2c775" {
+        return Ok(ProverMemoryMode::UpstreamV2);
+    }
+    if source != "git+https://github.com/starkware-libs/proving-utils?tag=v0.14.3-rust-bump#3035dd00421daa541894297bd754db6e2787807b" {
+        bail!("unsupported privacy-prove source {source}; review patch compatibility or use --stock-prover");
+    }
+
+    for (name, url, rev, _, _) in LOW_MEMORY_PROVER {
+        let prefix = format!("source = \"git+{url}?");
+        let suffix = format!("#{rev}\"");
+        if !lock.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with(&prefix) && line.ends_with(&suffix)
+        }) {
+            bail!("unsupported {name} revision for the V1 low-memory patches; regenerate the patches or use --stock-prover");
+        }
+    }
+    Ok(ProverMemoryMode::PatchedV1)
+}
+
+/// Remove setup-generated manifest/lock changes before changing pins. A repo initialized over
+/// cached build targets has no HEAD yet, so its first checkout needs no restoration.
+async fn checkout_sequencer(sequencer_dir: &Path, revision: &str) -> Result<()> {
+    let has_head = tokio::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .current_dir(sequencer_dir)
+        .output()
+        .await
+        .wrap_err("failed to inspect sequencer HEAD")?
+        .status
+        .success();
+    if has_head {
+        run_cmd_in(
+            "git",
+            &[
+                "checkout",
+                "--quiet",
+                "HEAD",
+                "--",
+                "Cargo.toml",
+                "Cargo.lock",
+            ],
+            sequencer_dir,
+        )
+        .await?;
+    }
+    run_cmd_in("git", &["checkout", "--quiet", revision], sequencer_dir).await
+}
+
+/// Apply the V1 patches only to their supported prover, or restore upstream for V2/stock mode.
 async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: bool) -> Result<()> {
-    // Start from the tag's manifest so re-runs and pin bumps never stack sections.
+    // Restore both files: a previous patched build rewrites git sources to local paths in the lock.
     run_cmd_in(
         "git",
-        &["checkout", "--quiet", "--", "Cargo.toml"],
+        &["checkout", "--quiet", "--", "Cargo.toml", "Cargo.lock"],
         sequencer_dir,
     )
     .await?;
@@ -977,16 +1043,10 @@ async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: b
         return Ok(());
     }
 
-    // The patches are made for exact commits; refuse a sequencer that pins others.
     let lock = tokio::fs::read_to_string(sequencer_dir.join("Cargo.lock")).await?;
-    for (name, _, rev, _, _) in LOW_MEMORY_PROVER {
-        if !lock.contains(&format!("#{rev}")) {
-            bail!(
-                "the sequencer at {SEQUENCER_TAG} no longer pins {name} {rev}, which \
-                 vendor/low-memory-prover/{name}.patch was made for. Regenerate the patches for \
-                 the new pins (vendor/low-memory-prover/README.md), or run setup with --stock-prover."
-            );
-        }
+    if prover_memory_mode(&lock)? == ProverMemoryMode::UpstreamV2 {
+        info!("  V2 prover: using upstream; the vendored low-memory patches support V1 only");
+        return Ok(());
     }
 
     info!("  Applying the low-memory prover patches...");
@@ -1100,4 +1160,204 @@ async fn walkdir_async(base: &Path) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod memory_mode_tests {
+    use super::*;
+
+    fn package(name: &str, source: &str) -> String {
+        format!("[[package]]\nname = \"{name}\"\nversion = \"1.0.0\"\nsource = \"{source}\"\n\n")
+    }
+
+    fn v1_lock() -> String {
+        LOW_MEMORY_PROVER
+            .iter()
+            .map(|(name, url, rev, _, _)| {
+                let package_name = if *name == "proving-utils" {
+                    "privacy-prove"
+                } else {
+                    name
+                };
+                let query = if *name == "proving-utils" {
+                    "tag=v0.14.3-rust-bump"
+                } else {
+                    "rev=pin"
+                };
+                package(package_name, &format!("git+{url}?{query}#{rev}"))
+            })
+            .collect()
+    }
+
+    fn v2_lock() -> String {
+        // The real V2 lock contains all V1 patch revisions through its legacy verifier.
+        let mut lock = v1_lock().replace(
+            "name = \"privacy-prove\"",
+            "name = \"privacy-circuit-verify\"",
+        );
+        lock.push_str(&package("privacy-prove", "git+https://github.com/starkware-libs/proving?rev=e0035ffc8e08da270b8cb4a71f3708af70c2c775#e0035ffc8e08da270b8cb4a71f3708af70c2c775"));
+        lock
+    }
+
+    #[test]
+    fn v2_with_legacy_verifier_does_not_apply_v1_patches() {
+        assert_eq!(
+            prover_memory_mode(&v2_lock()).unwrap(),
+            ProverMemoryMode::UpstreamV2
+        );
+        assert_eq!(
+            prover_memory_mode(&v1_lock()).unwrap(),
+            ProverMemoryMode::PatchedV1
+        );
+    }
+
+    #[test]
+    fn unknown_missing_or_ambiguous_provers_are_rejected() {
+        assert!(prover_memory_mode("").is_err());
+        assert!(prover_memory_mode(&v2_lock().replace("e0035ffc", "ffffffff")).is_err());
+        assert!(prover_memory_mode(&(v1_lock() + &v2_lock())).is_err());
+        assert!(prover_memory_mode("[[package]]\nname = \"privacy-prove\"\n").is_err());
+    }
+
+    #[test]
+    fn v1_requires_each_patch_source_at_the_supported_revision() {
+        for (_, url, rev, _, _) in LOW_MEMORY_PROVER {
+            assert!(prover_memory_mode(&v1_lock().replace(rev, "unknown")).is_err());
+            assert!(
+                prover_memory_mode(&v1_lock().replace(url, "https://example.invalid/other"))
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_setup_removes_stale_manifest_and_lock_patches_without_cloning() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let sequencer = tmp.path().join("sequencer");
+        tokio::fs::create_dir(&sequencer).await?;
+        let manifest = "[workspace]\nmembers = []\n";
+        let lock = v2_lock();
+        tokio::fs::write(sequencer.join("Cargo.toml"), manifest).await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), &lock).await?;
+        run_cmd_in("git", &["init", "--quiet"], &sequencer).await?;
+        run_cmd_in("git", &["add", "Cargo.toml", "Cargo.lock"], &sequencer).await?;
+        run_cmd_in(
+            "git",
+            &[
+                "-c",
+                "user.name=Setup Test",
+                "-c",
+                "user.email=setup@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+            &sequencer,
+        )
+        .await?;
+        tokio::fs::write(sequencer.join("Cargo.toml"), "stale patch section").await?;
+        tokio::fs::write(
+            sequencer.join("Cargo.lock"),
+            "stale local path dependencies",
+        )
+        .await?;
+
+        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        // A second setup must also succeed without creating patched dependency clones.
+        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
+            manifest
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.lock")).await?,
+            lock
+        );
+        assert!(!tmp.path().join("low-memory-prover").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upgrade_dirty_v1_checkout_and_initialize_cached_repo() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let sequencer = tmp.path().join("sequencer");
+        tokio::fs::create_dir(&sequencer).await?;
+        run_cmd_in("git", &["init", "--quiet"], &sequencer).await?;
+        let commit = [
+            "-c",
+            "user.name=Setup Test",
+            "-c",
+            "user.email=setup@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ];
+        tokio::fs::write(sequencer.join("Cargo.toml"), "old manifest").await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), v1_lock()).await?;
+        tokio::fs::write(sequencer.join("notes.txt"), "original notes").await?;
+        run_cmd_in("git", &["add", "."], &sequencer).await?;
+        run_cmd_in("git", &commit, &sequencer).await?;
+        run_cmd_in("git", &["tag", "old-pin"], &sequencer).await?;
+        tokio::fs::write(sequencer.join("Cargo.toml"), "new manifest").await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), v2_lock()).await?;
+        run_cmd_in("git", &["add", "."], &sequencer).await?;
+        run_cmd_in("git", &commit, &sequencer).await?;
+        run_cmd_in("git", &["tag", "new-pin"], &sequencer).await?;
+        run_cmd_in("git", &["checkout", "--quiet", "old-pin"], &sequencer).await?;
+        tokio::fs::write(
+            sequencer.join("Cargo.toml"),
+            "old manifest with local patches",
+        )
+        .await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), "local path dependencies").await?;
+        tokio::fs::write(sequencer.join("notes.txt"), "keep these notes").await?;
+        let rejected = tokio::process::Command::new("git")
+            .args(["checkout", "--quiet", "new-pin"])
+            .current_dir(&sequencer)
+            .output()
+            .await?;
+        assert!(
+            !rejected.status.success(),
+            "fixture must reproduce the upgrade failure"
+        );
+
+        checkout_sequencer(&sequencer, "new-pin").await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
+            "new manifest"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.lock")).await?,
+            v2_lock()
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("notes.txt")).await?,
+            "keep these notes"
+        );
+        assert!(!tmp.path().join("low-memory-prover").exists());
+
+        // CI may restore target/ into an initialized repository without a checked-out HEAD.
+        let fresh = tmp.path().join("cached-repo");
+        tokio::fs::create_dir(&fresh).await?;
+        run_cmd_in("git", &["init", "--quiet"], &fresh).await?;
+        run_cmd_in(
+            "git",
+            &["fetch", "--quiet", sequencer.to_str().unwrap(), "new-pin"],
+            &fresh,
+        )
+        .await?;
+        checkout_sequencer(&fresh, "FETCH_HEAD").await?;
+        assert_eq!(
+            tokio::fs::read_to_string(fresh.join("Cargo.lock")).await?,
+            v2_lock()
+        );
+        Ok(())
+    }
 }
