@@ -227,12 +227,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
     .await?;
 
     info!("  Checking out {SEQUENCER_TAG}...");
-    run_cmd_in(
-        "git",
-        &["checkout", SEQUENCER_TAG, "--quiet"],
-        &sequencer_dir,
-    )
-    .await?;
+    checkout_sequencer(&sequencer_dir, SEQUENCER_TAG).await?;
 
     // Apply macOS RLIMIT_AS patch
     apply_macos_patch(&sequencer_dir).await?;
@@ -1005,6 +1000,35 @@ fn prover_memory_mode(lock: &str) -> Result<ProverMemoryMode> {
     Ok(ProverMemoryMode::PatchedV1)
 }
 
+/// Remove setup-generated manifest/lock changes before changing pins. A repo initialized over
+/// cached build targets has no HEAD yet, so its first checkout needs no restoration.
+async fn checkout_sequencer(sequencer_dir: &Path, revision: &str) -> Result<()> {
+    let has_head = tokio::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .current_dir(sequencer_dir)
+        .output()
+        .await
+        .wrap_err("failed to inspect sequencer HEAD")?
+        .status
+        .success();
+    if has_head {
+        run_cmd_in(
+            "git",
+            &[
+                "checkout",
+                "--quiet",
+                "HEAD",
+                "--",
+                "Cargo.toml",
+                "Cargo.lock",
+            ],
+            sequencer_dir,
+        )
+        .await?;
+    }
+    run_cmd_in("git", &["checkout", "--quiet", revision], sequencer_dir).await
+}
+
 /// Apply the V1 patches only to their supported prover, or restore upstream for V2/stock mode.
 async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: bool) -> Result<()> {
     // Restore both files: a previous patched build rewrites git sources to local paths in the lock.
@@ -1253,6 +1277,87 @@ mod memory_mode_tests {
             lock
         );
         assert!(!tmp.path().join("low-memory-prover").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upgrade_dirty_v1_checkout_and_initialize_cached_repo() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let sequencer = tmp.path().join("sequencer");
+        tokio::fs::create_dir(&sequencer).await?;
+        run_cmd_in("git", &["init", "--quiet"], &sequencer).await?;
+        let commit = [
+            "-c",
+            "user.name=Setup Test",
+            "-c",
+            "user.email=setup@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ];
+        tokio::fs::write(sequencer.join("Cargo.toml"), "old manifest").await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), v1_lock()).await?;
+        tokio::fs::write(sequencer.join("notes.txt"), "original notes").await?;
+        run_cmd_in("git", &["add", "."], &sequencer).await?;
+        run_cmd_in("git", &commit, &sequencer).await?;
+        run_cmd_in("git", &["tag", "old-pin"], &sequencer).await?;
+        tokio::fs::write(sequencer.join("Cargo.toml"), "new manifest").await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), v2_lock()).await?;
+        run_cmd_in("git", &["add", "."], &sequencer).await?;
+        run_cmd_in("git", &commit, &sequencer).await?;
+        run_cmd_in("git", &["tag", "new-pin"], &sequencer).await?;
+        run_cmd_in("git", &["checkout", "--quiet", "old-pin"], &sequencer).await?;
+        tokio::fs::write(
+            sequencer.join("Cargo.toml"),
+            "old manifest with local patches",
+        )
+        .await?;
+        tokio::fs::write(sequencer.join("Cargo.lock"), "local path dependencies").await?;
+        tokio::fs::write(sequencer.join("notes.txt"), "keep these notes").await?;
+        let rejected = tokio::process::Command::new("git")
+            .args(["checkout", "--quiet", "new-pin"])
+            .current_dir(&sequencer)
+            .output()
+            .await?;
+        assert!(
+            !rejected.status.success(),
+            "fixture must reproduce the upgrade failure"
+        );
+
+        checkout_sequencer(&sequencer, "new-pin").await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
+            "new manifest"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("Cargo.lock")).await?,
+            v2_lock()
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(sequencer.join("notes.txt")).await?,
+            "keep these notes"
+        );
+        assert!(!tmp.path().join("low-memory-prover").exists());
+
+        // CI may restore target/ into an initialized repository without a checked-out HEAD.
+        let fresh = tmp.path().join("cached-repo");
+        tokio::fs::create_dir(&fresh).await?;
+        run_cmd_in("git", &["init", "--quiet"], &fresh).await?;
+        run_cmd_in(
+            "git",
+            &["fetch", "--quiet", sequencer.to_str().unwrap(), "new-pin"],
+            &fresh,
+        )
+        .await?;
+        checkout_sequencer(&fresh, "FETCH_HEAD").await?;
+        assert_eq!(
+            tokio::fs::read_to_string(fresh.join("Cargo.lock")).await?,
+            v2_lock()
+        );
         Ok(())
     }
 }
