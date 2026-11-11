@@ -81,6 +81,26 @@ before switching variants, and run with `--repeats 3 --threads 14`.
 Linux validation is separate: it uses the source profile and stock V2 golden
 proof bytes, not these macOS timing numbers.
 
+### Linux and Sepolia validation (2026-11-11)
+
+[Source-profile run 43037496315](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43037496315)
+passed on Linux with `prover=source` and `SN_SEPOLIA`. It built the patched
+sequencer runner, verified both fixture proofs and their stock V2 hashes, then
+passed the counter and L2→L1 messages flows with gateway acceptance and inclusion:
+
+- Counter: block **17984187**, counter **0 → 1**.
+- Messages: block **17984227**, one message to `0x123` with payload `[0x1, 0x2, 0x3]`.
+- Counter virtual-OS program hash: `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`.
+
+The Linux fixture checks reported maximum RSS of 2,348,264 KiB (transfer) and
+2,353,436 KiB (withdraw). These are single profile samples, without a Linux stock
+timing/memory comparison. The run used commit `00bdcf1`; its V2 patch is identical
+to the subsequent source-default change (SHA-256
+`f660e9529bf7af772333e1093cc1fefb6e73d835d01dc87d15e31cb4942b770a`).
+Default selection, repeated setup and switching to stock and back were also
+checked locally. Mainnet, concurrent proving and CoinFlip settlement were not
+tested for this profile.
+
 Validation results, invariants, the pre-existing relation-tracker failure, and
 remaining release-review scope are recorded in [V2-REVIEW.md](V2-REVIEW.md).
 
