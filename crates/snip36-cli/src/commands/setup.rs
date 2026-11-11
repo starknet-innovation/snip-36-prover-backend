@@ -148,7 +148,7 @@ pub struct SetupArgs {
     /// Download prebuilt deps from the pinned GitHub release instead of
     /// building from source (~30s instead of ~30min; supported on
     /// darwin-arm64, linux-x86_64, linux-arm64)
-    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner", "stock_prover", "low_memory_prover"])]
+    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner", "stock_prover"])]
     prebuilt: bool,
 
     /// Skip building stwo-run-and-prove
@@ -162,10 +162,6 @@ pub struct SetupArgs {
     /// Force the unpatched upstream prover instead of the version-specific memory optimizations.
     #[arg(long)]
     stock_prover: bool,
-
-    /// Use the V2 low-memory profile (less RAM, with a throughput tradeoff).
-    #[arg(long, conflicts_with = "stock_prover")]
-    low_memory_prover: bool,
 }
 
 pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -274,13 +270,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
 
     // Apply macOS RLIMIT_AS patch
     apply_macos_patch(&sequencer_dir).await?;
-    apply_low_memory_prover(
-        deps_dir,
-        &sequencer_dir,
-        args.stock_prover,
-        args.low_memory_prover,
-    )
-    .await?;
+    apply_low_memory_prover(deps_dir, &sequencer_dir, args.stock_prover).await?;
     info!("");
 
     // [4/8] Python venv
@@ -1084,12 +1074,7 @@ async fn checkout_sequencer(sequencer_dir: &Path, revision: &str) -> Result<()> 
 }
 
 /// Apply the patch set for the supported prover, or restore upstream in stock mode.
-async fn apply_low_memory_prover(
-    deps_dir: &Path,
-    sequencer_dir: &Path,
-    stock: bool,
-    enable_v2: bool,
-) -> Result<()> {
+async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: bool) -> Result<()> {
     // Restore both files: a previous patched build rewrites git sources to local paths in the lock.
     run_cmd_in(
         "git",
@@ -1105,11 +1090,7 @@ async fn apply_low_memory_prover(
     let lock = tokio::fs::read_to_string(sequencer_dir.join("Cargo.lock")).await?;
     let repos = match prover_memory_mode(&lock)? {
         ProverMemoryMode::PatchedV1 => LOW_MEMORY_PROVER,
-        ProverMemoryMode::PatchedV2 if enable_v2 => LOW_MEMORY_PROVER_V2,
-        ProverMemoryMode::PatchedV2 => {
-            info!("  V2 prover: upstream (use --low-memory-prover for the lower-RAM profile)");
-            return Ok(());
-        }
+        ProverMemoryMode::PatchedV2 => LOW_MEMORY_PROVER_V2,
     };
 
     info!("  Applying the low-memory prover patches...");
@@ -1349,9 +1330,9 @@ mod memory_mode_tests {
         )
         .await?;
 
-        apply_low_memory_prover(tmp.path(), &sequencer, true, false).await?;
-        // The ordinary V2 default must also restore upstream, without any clone.
-        apply_low_memory_prover(tmp.path(), &sequencer, false, false).await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, true).await?;
+        // Explicit stock mode must remain idempotent, without creating patched clones.
+        apply_low_memory_prover(tmp.path(), &sequencer, true).await?;
         assert_eq!(
             tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
             manifest
@@ -1412,7 +1393,7 @@ mod memory_mode_tests {
         );
 
         checkout_sequencer(&sequencer, "new-pin").await?;
-        apply_low_memory_prover(tmp.path(), &sequencer, true, false).await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, true).await?;
         assert_eq!(
             tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
             "new manifest"

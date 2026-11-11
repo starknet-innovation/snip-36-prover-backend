@@ -189,7 +189,7 @@ jobs:
       - name: Build patched runner from source
         if: env.RUN_E2E == 'true' && inputs.prover == 'source'
         run: |
-          ./snip36 setup --skip-prover --low-memory-prover
+          ./snip36 setup --skip-prover
           test -d deps/low-memory-prover/proving-v2
           grep -Fq '[patch."https://github.com/starkware-libs/proving"]' deps/sequencer/Cargo.toml
 

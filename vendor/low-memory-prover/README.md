@@ -1,17 +1,19 @@
 # Low-memory prover
 
 Version-specific ports of the [provably.fast frontier](https://stwo.provably.fast/).
-V1 keeps its original default. For the current V2 stack (`privacy-prove` at
-`e0035ffc`), select the lower-memory profile explicitly:
+V1 and the current V2 stack (`privacy-prove` at `e0035ffc`) use their supported
+low-memory patch set by default when building dependencies from source:
 
 ```bash
-snip36 setup --low-memory-prover
+snip36 setup
 scripts/check-low-memory-prover.sh
 ```
 
-Ordinary V2 source setup and the existing `deps-v15` prebuilt bundle retain the
-upstream prover. The profile is opt-in because it trades some latency/CPU work
-for lower memory. `--stock-prover` restores upstream for either version.
+This is an unreleased source change: build the CLI from this source tree first.
+The published v1.4.1 CLI and existing `deps-v15` prebuilt bundle are unchanged.
+A new prebuilt bundle requires a separate release. `--stock-prover` restores
+upstream for either version. The lower-memory default is intentional: it trades
+some CPU work for substantially less RAM.
 
 ## V2 port
 
@@ -103,7 +105,7 @@ They change how the prover schedules and frees memory, never what it proves:
 These revisions belong to the V1 sequencers `9f78ee7c` (v1.2.2) and
 `e6b6fd2e`. Setup first identifies the actual `privacy-prove` package source,
 then checks the exact V1 patch revisions. This matters because the V2 lockfile
-also contains old V1 verifier dependencies. V2 uses upstream unless `--low-memory-prover` is selected;
+also contains old V1 verifier dependencies. V2 selects its separate low-memory patch set by default;
 unknown prover revisions fail with guidance to review compatibility or explicitly
 use `--stock-prover`. Setup restores the sequencer manifest before selecting a
 mode, so switching away from V1 removes any stale patch sections.

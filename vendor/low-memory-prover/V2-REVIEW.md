@@ -12,11 +12,11 @@
 - Workspace: 44 unit tests, build, Clippy with warnings denied, formatting.
 - Pinned V2 stack: 277 STWO tests, 14 constraint-framework tests, 22 circuit-prover tests, 73 circuit tests, and 24 Cairo prover tests with `nightly` enabled and the production relation-tracker feature disabled.
 - Both public transfer/withdraw PIEs prove, verify, and match stock V2 bytes. Two consecutive proofs per fixture with shared precomputes also match.
-- Patch applies to and reverses from the exact upstream pin. The default V2 source path stays stock; the new profile is explicit.
+- Patch applies to and reverses from the exact upstream pin. The V2 source default is low-memory; explicit stock mode remains available.
 
 The Cairo prover's all-features Pedersen test panics in the upstream relation tracker (`relation_tracker.rs:97`, length 2/index 2). The same exact test fails on unmodified e0035ffc. This is a pre-existing debug-feature failure, not a green all-features claim. The port also adapts that debug consumer to reconstruct striped/coefficients-only columns instead of treating their buffers as full-domain evaluations.
 
-## Review required before a release default
+## Independent review before publication
 
 SOUNDNESS-ESCALATION:
 - Files: `crates/stwo/src/prover/backend/simd/{circle,column,fft/*}.rs`, `pcs/*`, `vcs_lifted/*`, and constraint-framework prover kernels in `proving-v2.patch`.
@@ -25,4 +25,4 @@ SOUNDNESS-ESCALATION:
 - Theory reference: Circle STARK FFT/inverse (`thm:FFT`, `thm:FFT:inverse`), domain and DEEP quotient invariants; V2 protocol ordering is preserved from e0035ffc.
 - Reason: this is a substantial port of unsafe SIMD/FFT code. Fixture equality, CPU differential tests, and live validation do not replace an independent cryptographic/memory-safety review.
 
-The default and existing releases are unchanged. A profile-enabled dependency bundle and release are separate publication work.
+The source default is intentionally low-memory at the user's request. Existing releases are unchanged; an optimized dependency bundle and release are separate publication work.
