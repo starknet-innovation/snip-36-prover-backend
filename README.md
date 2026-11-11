@@ -103,6 +103,11 @@ The Sierra compiler is installed under `deps/compiler-tools` and passed to the
 runner via `CARGO_TOOLS_ROOT`, so the prebuilt runner is relocatable.
 `./scripts/download-deps.sh [TAG]` does the same without a built CLI.
 
+For a lower-memory V2 runner, build from source with
+`snip36 setup --low-memory-prover`. This profile preserves stock V2 proof bytes
+and trades some latency/CPU work for lower peak memory. The existing `deps-v15`
+prebuilt bundle uses upstream V2. See the [profile and reproducible checks](vendor/low-memory-prover/README.md#v2-port).
+
 **From source (~30 minutes — contributors, or platforms without prebuilt assets):**
 
 ```bash

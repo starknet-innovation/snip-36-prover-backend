@@ -28,8 +28,7 @@ const PROVING_UTILS_LOCKFILE: &[u8] = include_bytes!("../../../../vendor/proving
 
 /// The low-memory prover: the provably.fast memory frontier (starknet-innovation/proving
 /// 77964886) backported onto the stwo stack SEQUENCER_TAG pins. It changes how the prover
-/// schedules and frees memory for the V1 prover. These patches have not been ported to V2;
-/// that stack uses its upstream prover. See vendor/low-memory-prover/README.md.
+/// schedules and frees memory. V1 and V2 each have a patch set for their exact pins. See vendor/low-memory-prover/README.md.
 ///
 /// (repo, clone URL, the commit the sequencer's Cargo.lock pins, patch, [patch] entries: package
 /// name and its path inside the repo).
@@ -104,12 +103,52 @@ const LOW_MEMORY_PROVER: &[LowMemoryRepo] = &[
     ),
 ];
 
+const LOW_MEMORY_PROVER_V2: &[LowMemoryRepo] = &[(
+    "proving-v2",
+    "https://github.com/starkware-libs/proving",
+    "e0035ffc8e08da270b8cb4a71f3708af70c2c775",
+    include_str!("../../../../vendor/low-memory-prover/proving-v2.patch"),
+    &[
+        ("stwo", "crates/stwo"),
+        ("stwo-air-utils", "crates/air-utils"),
+        ("stwo-air-utils-derive", "crates/air-utils-derive"),
+        ("stwo-constraint-framework", "crates/constraint-framework"),
+        ("stwo-cairo-adapter", "crates/adapter"),
+        ("stwo-cairo-common", "crates/common"),
+        ("stwo-cairo-serialize", "crates/cairo-serialize"),
+        (
+            "stwo-cairo-serialize-derive",
+            "crates/cairo-serialize-derive",
+        ),
+        ("cairo-air", "crates/cairo-air"),
+        ("stwo-cairo-prover", "crates/prover"),
+        ("stwo-cairo-utils", "crates/utils"),
+        ("circuit-cairo-verifier", "crates/cairo_verifier"),
+        ("circuit-common", "crates/circuit_common"),
+        ("circuits", "crates/circuits"),
+        ("circuits-stark-verifier", "crates/stark_verifier"),
+        ("circuit-prover", "crates/circuit_prover"),
+        ("circuit-verifier", "crates/circuit_verifier"),
+        ("circuit-serialize", "crates/circuit_serialize"),
+        (
+            "cairo-program-runner-lib",
+            "crates/cairo-program-runner-lib",
+        ),
+        ("leaf-proof-format", "crates/leaf_proof_format"),
+        ("circuit-registry", "crates/circuit_registry"),
+        ("leaf-prover", "crates/leaf_prover"),
+        ("privacy-circuit-verify", "crates/privacy_circuit_verify"),
+        ("privacy_common", "crates/privacy_common"),
+        ("privacy-prove", "crates/privacy_prove"),
+    ],
+)];
+
 #[derive(Args)]
 pub struct SetupArgs {
     /// Download prebuilt deps from the pinned GitHub release instead of
     /// building from source (~30s instead of ~30min; supported on
     /// darwin-arm64, linux-x86_64, linux-arm64)
-    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner", "stock_prover"])]
+    #[arg(long, conflicts_with_all = ["skip_prover", "skip_runner", "stock_prover", "low_memory_prover"])]
     prebuilt: bool,
 
     /// Skip building stwo-run-and-prove
@@ -120,9 +159,13 @@ pub struct SetupArgs {
     #[arg(long)]
     skip_runner: bool,
 
-    /// Force the unpatched upstream prover (already the default for the supported V2 stack).
+    /// Force the unpatched upstream prover instead of the version-specific memory optimizations.
     #[arg(long)]
     stock_prover: bool,
+
+    /// Use the V2 low-memory profile (less RAM, with a throughput tradeoff).
+    #[arg(long, conflicts_with = "stock_prover")]
+    low_memory_prover: bool,
 }
 
 pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<()> {
@@ -231,7 +274,13 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
 
     // Apply macOS RLIMIT_AS patch
     apply_macos_patch(&sequencer_dir).await?;
-    apply_low_memory_prover(deps_dir, &sequencer_dir, args.stock_prover).await?;
+    apply_low_memory_prover(
+        deps_dir,
+        &sequencer_dir,
+        args.stock_prover,
+        args.low_memory_prover,
+    )
+    .await?;
     info!("");
 
     // [4/8] Python venv
@@ -959,7 +1008,7 @@ fn extract_channel(toml_content: &str) -> Option<String> {
 #[derive(Debug, PartialEq, Eq)]
 enum ProverMemoryMode {
     PatchedV1,
-    UpstreamV2,
+    PatchedV2,
 }
 
 fn prover_memory_mode(lock: &str) -> Result<ProverMemoryMode> {
@@ -981,7 +1030,12 @@ fn prover_memory_mode(lock: &str) -> Result<ProverMemoryMode> {
         .find_map(|line| line.trim().strip_prefix("source = \"")?.strip_suffix('"'))
         .ok_or_else(|| eyre::eyre!("privacy-prove has no git source in sequencer Cargo.lock"))?;
     if source == "git+https://github.com/starkware-libs/proving?rev=e0035ffc8e08da270b8cb4a71f3708af70c2c775#e0035ffc8e08da270b8cb4a71f3708af70c2c775" {
-        return Ok(ProverMemoryMode::UpstreamV2);
+        let prefix = "source = \"git+https://github.com/starkware-libs/proving?";
+        let suffix = "#e0035ffc8e08da270b8cb4a71f3708af70c2c775\"";
+        if lock.lines().any(|line| line.trim().starts_with(prefix) && !line.trim().ends_with(suffix)) {
+            bail!("mixed proving revisions in sequencer Cargo.lock; review V2 patch compatibility");
+        }
+        return Ok(ProverMemoryMode::PatchedV2);
     }
     if source != "git+https://github.com/starkware-libs/proving-utils?tag=v0.14.3-rust-bump#3035dd00421daa541894297bd754db6e2787807b" {
         bail!("unsupported privacy-prove source {source}; review patch compatibility or use --stock-prover");
@@ -1029,8 +1083,13 @@ async fn checkout_sequencer(sequencer_dir: &Path, revision: &str) -> Result<()> 
     run_cmd_in("git", &["checkout", "--quiet", revision], sequencer_dir).await
 }
 
-/// Apply the V1 patches only to their supported prover, or restore upstream for V2/stock mode.
-async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: bool) -> Result<()> {
+/// Apply the patch set for the supported prover, or restore upstream in stock mode.
+async fn apply_low_memory_prover(
+    deps_dir: &Path,
+    sequencer_dir: &Path,
+    stock: bool,
+    enable_v2: bool,
+) -> Result<()> {
     // Restore both files: a previous patched build rewrites git sources to local paths in the lock.
     run_cmd_in(
         "git",
@@ -1044,10 +1103,14 @@ async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: b
     }
 
     let lock = tokio::fs::read_to_string(sequencer_dir.join("Cargo.lock")).await?;
-    if prover_memory_mode(&lock)? == ProverMemoryMode::UpstreamV2 {
-        info!("  V2 prover: using upstream; the vendored low-memory patches support V1 only");
-        return Ok(());
-    }
+    let repos = match prover_memory_mode(&lock)? {
+        ProverMemoryMode::PatchedV1 => LOW_MEMORY_PROVER,
+        ProverMemoryMode::PatchedV2 if enable_v2 => LOW_MEMORY_PROVER_V2,
+        ProverMemoryMode::PatchedV2 => {
+            info!("  V2 prover: upstream (use --low-memory-prover for the lower-RAM profile)");
+            return Ok(());
+        }
+    };
 
     info!("  Applying the low-memory prover patches...");
     let root = deps_dir.join("low-memory-prover");
@@ -1055,7 +1118,7 @@ async fn apply_low_memory_prover(deps_dir: &Path, sequencer_dir: &Path, stock: b
     let mut section = String::from(
         "\n# snip36: low-memory prover (vendor/low-memory-prover), written by `snip36 setup`.\n",
     );
-    for (name, url, rev, patch, crates) in LOW_MEMORY_PROVER {
+    for (name, url, rev, patch, crates) in repos {
         let dir = root.join(name);
         ensure_repo(&dir, &format!("{url}.git")).await?;
         run_cmd_in("git", &["fetch", "--quiet", "origin", rev], &dir).await?;
@@ -1200,10 +1263,10 @@ mod memory_mode_tests {
     }
 
     #[test]
-    fn v2_with_legacy_verifier_does_not_apply_v1_patches() {
+    fn v2_with_legacy_verifier_selects_only_v2_patches() {
         assert_eq!(
             prover_memory_mode(&v2_lock()).unwrap(),
-            ProverMemoryMode::UpstreamV2
+            ProverMemoryMode::PatchedV2
         );
         assert_eq!(
             prover_memory_mode(&v1_lock()).unwrap(),
@@ -1220,6 +1283,27 @@ mod memory_mode_tests {
     }
 
     #[test]
+    fn v2_rejects_a_mixed_monorepo_even_with_the_supported_privacy_prover() {
+        let mixed = v2_lock()
+            + &package(
+                "circuit-prover",
+                "git+https://github.com/starkware-libs/proving?rev=unknown#unknown",
+            );
+        assert!(prover_memory_mode(&mixed).is_err());
+        assert_eq!(LOW_MEMORY_PROVER_V2.len(), 1);
+        let packages = LOW_MEMORY_PROVER_V2[0].4;
+        for name in [
+            "privacy-prove",
+            "circuits",
+            "circuit-prover",
+            "stwo",
+            "privacy_common",
+        ] {
+            assert!(packages.iter().any(|(package, _)| *package == name));
+        }
+    }
+
+    #[test]
     fn v1_requires_each_patch_source_at_the_supported_revision() {
         for (_, url, rev, _, _) in LOW_MEMORY_PROVER {
             assert!(prover_memory_mode(&v1_lock().replace(rev, "unknown")).is_err());
@@ -1231,7 +1315,7 @@ mod memory_mode_tests {
     }
 
     #[tokio::test]
-    async fn v2_setup_removes_stale_manifest_and_lock_patches_without_cloning() -> Result<()> {
+    async fn stock_setup_removes_stale_manifest_and_lock_patches_without_cloning() -> Result<()> {
         let tmp = tempfile::tempdir()?;
         let sequencer = tmp.path().join("sequencer");
         tokio::fs::create_dir(&sequencer).await?;
@@ -1265,9 +1349,9 @@ mod memory_mode_tests {
         )
         .await?;
 
-        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
-        // A second setup must also succeed without creating patched dependency clones.
-        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, true, false).await?;
+        // The ordinary V2 default must also restore upstream, without any clone.
+        apply_low_memory_prover(tmp.path(), &sequencer, false, false).await?;
         assert_eq!(
             tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
             manifest
@@ -1328,7 +1412,7 @@ mod memory_mode_tests {
         );
 
         checkout_sequencer(&sequencer, "new-pin").await?;
-        apply_low_memory_prover(tmp.path(), &sequencer, false).await?;
+        apply_low_memory_prover(tmp.path(), &sequencer, true, false).await?;
         assert_eq!(
             tokio::fs::read_to_string(sequencer.join("Cargo.toml")).await?,
             "new manifest"

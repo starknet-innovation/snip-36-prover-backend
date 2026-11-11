@@ -16,6 +16,14 @@ on:
         options:
           - sepolia
           - mainnet
+      prover:
+        description: 'Use pinned prebuilt deps or build the patched runner from source'
+        type: choice
+        required: true
+        default: prebuilt
+        options:
+          - prebuilt
+          - source
 
 permissions:
   contents: read
@@ -94,6 +102,19 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # The same path list as build-deps.yml permits restoring source-build caches.
+      - name: Cache source build targets
+        if: env.RUN_E2E == 'true' && inputs.prover == 'source'
+        uses: actions/cache@v6
+        with:
+          path: |
+            target
+            deps/proving-utils/target
+            deps/sequencer/target
+          key: ${{ runner.os }}-source-v2-${{ env.SEQUENCER_TAG }}-${{ hashFiles('vendor/low-memory-prover/proving-v2.patch', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-target-linux-x86_64-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-
+
       - name: Build snip36 CLI
         if: env.RUN_E2E == 'true'
         run: cargo build --release -p snip36-cli
@@ -164,6 +185,19 @@ jobs:
             rm -rf deps sequencer_venv
             ./snip36 setup
           fi
+
+      - name: Build patched runner from source
+        if: env.RUN_E2E == 'true' && inputs.prover == 'source'
+        run: |
+          ./snip36 setup --skip-prover --low-memory-prover
+          test -d deps/low-memory-prover/proving-v2
+          grep -Fq '[patch."https://github.com/starkware-libs/proving"]' deps/sequencer/Cargo.toml
+
+      - name: Verify source V2 fixture proofs against stock bytes
+        if: env.RUN_E2E == 'true' && inputs.prover == 'source'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/deps/sequencer/target
+        run: ./scripts/check-low-memory-prover-v2.sh
 
       - name: Probe Starknet RPC from runner
         if: env.RUN_E2E == 'true'
