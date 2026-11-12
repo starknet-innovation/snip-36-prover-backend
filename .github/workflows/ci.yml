@@ -30,6 +30,9 @@ jobs:
       - name: Check version sync
         run: ./scripts/check-versions.sh
 
+      - name: Check prover validation dispatch
+        run: python3 scripts/test-low-memory-dispatch.py
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

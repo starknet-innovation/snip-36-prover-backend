@@ -151,20 +151,20 @@ jobs:
           scarb --version
           python3 --version
 
-      # Cache the heavy deps: prebuilt binaries + cairo-compile venv. Key
-      # includes the pins so it rebuilds when they change.
+      # Restore verified prebuilt dependencies only. This fresh namespace excludes
+      # old caches that a source run could have populated during its post-step.
       - name: Cache prebuilt deps
         id: deps-cache
         if: env.RUN_E2E == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: |
             deps
             sequencer_venv
-          key: ${{ runner.os }}-deps-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}-${{ hashFiles('deps-version') }}
-          save-always: true
+          key: ${{ runner.os }}-deps-prebuilt-v1-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-${{ env.STWO_NIGHTLY }}-${{ hashFiles('deps-version') }}
 
       - name: Provision deps (prebuilt release, source-build fallback)
+        id: provision-deps
         if: env.RUN_E2E == 'true' && steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           set -uo pipefail
@@ -181,15 +181,30 @@ jobs:
              && [ -n "$(find deps/compiler-tools -path '*/bin/starknet-sierra-compile' -type f -perm -111 | head -n 1)" ] \
              && [ -x deps/bin/stwo-run-and-prove ]; then
             echo "Provisioned deps from prebuilt release $DEPS_RELEASE_TAG"
+            echo 'prebuilt=true' >> "$GITHUB_OUTPUT"
           else
             echo "Prebuilt provisioning incomplete; cleaning and building from source"
             rm -rf deps sequencer_venv
             ./snip36 setup
           fi
 
+      # Save before any source setup mutates deps. Neither manual source runs
+      # nor the provisioning source-build fallback may publish a prebuilt cache.
+      - name: Save verified prebuilt deps
+        if: env.RUN_E2E == 'true' && inputs.prover != 'source' && steps.deps-cache.outputs.cache-hit != 'true' && steps.provision-deps.outputs.prebuilt == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            deps
+            sequencer_venv
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
       - name: Build patched runner from source
         if: env.RUN_E2E == 'true' && inputs.prover == 'source'
         run: |
+          # A prebuilt restore can overwrite this binary after source targets
+          # were cached. Force relinking instead of trusting stale fingerprints.
+          rm -f deps/sequencer/target/release/starknet_transaction_prover
           ./snip36 setup --skip-prover
           test -d deps/low-memory-prover/proving-v2
           grep -Fq '[patch."https://github.com/starkware-libs/proving"]' deps/sequencer/Cargo.toml

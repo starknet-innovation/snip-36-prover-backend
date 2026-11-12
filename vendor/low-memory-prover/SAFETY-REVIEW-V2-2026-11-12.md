@@ -21,6 +21,19 @@ unsafe platform-specific code under review. V2 continues using the ordinary
 allocator. Spare-page advice now receives an exclusive slice; newly exposed
 storage is initialized after any spare-page release.
 
+The two Codex review comments were also confirmed and fixed:
+
+- Prebuilt caches now use a fresh namespace and explicit restore/save actions.
+  Saving happens before source mutation, only after successful release
+  provisioning, and excludes source runs and the source-build fallback. The old
+  potentially contaminated namespace is not restored. Source setup removes the
+  runner binary first so a prebuilt restore cannot masquerade as an up-to-date
+  source binary behind cached Cargo fingerprints.
+- Validation dispatch matches the exact active V2 patch header, not the shared
+  `proving`/`proving-utils` URL prefix. A missing active V2 checkout fails. Five
+  offline regressions cover stale directories, V1/V2 selection, commented
+  headers, missing checkouts and stock mode; workspace CI runs them.
+
 Rust's [`Vec::set_len` safety contract](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.set_len)
 requires initialized elements, and allocation ownership must retain its original
 deallocation layout. A promise that a later caller will overwrite data does not

@@ -11,7 +11,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="${1:-$ROOT/deps}"
-if [ -d "$DEPS/low-memory-prover/proving-v2" ] && grep -q 'starkware-libs/proving' "$DEPS/sequencer/Cargo.toml"; then
+if grep -Fxq '[patch."https://github.com/starkware-libs/proving"]' "$DEPS/sequencer/Cargo.toml"; then
+  if [ ! -d "$DEPS/low-memory-prover/proving-v2" ]; then
+    echo "error: active V2 patch has no proving-v2 checkout; run snip36 setup first" >&2
+    exit 1
+  fi
   exec "$ROOT/scripts/check-low-memory-prover-v2.sh" "$DEPS/low-memory-prover/proving-v2"
 fi
 CHECK="$ROOT/vendor/low-memory-prover/check"
