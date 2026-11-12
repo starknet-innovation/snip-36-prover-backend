@@ -113,6 +113,7 @@ jobs:
             deps/sequencer/target
           key: ${{ runner.os }}-source-v2-${{ env.SEQUENCER_TAG }}-${{ hashFiles('vendor/low-memory-prover/proving-v2.patch', 'Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-source-v2-${{ env.SEQUENCER_TAG }}-
             ${{ runner.os }}-deps-target-linux-x86_64-${{ env.STWO_NIGHTLY }}-${{ env.SEQUENCER_TAG }}-${{ env.PROVING_UTILS_REV }}-
 
       - name: Build snip36 CLI

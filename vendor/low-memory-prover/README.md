@@ -103,6 +103,9 @@ tested for this profile.
 
 Validation results, invariants, the pre-existing relation-tracker failure, and
 remaining release-review scope are recorded in [V2-REVIEW.md](V2-REVIEW.md).
+The [2026-11-12 SIMD/FFT review](SAFETY-REVIEW-V2-2026-11-12.md) includes
+memory-safety fixes and reproducible interpreter, sanitizer and CPU differential
+checks. The measurements above describe the initial port before those fixes.
 
 ## V1 history
 

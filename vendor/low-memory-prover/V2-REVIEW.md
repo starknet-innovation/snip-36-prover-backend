@@ -7,6 +7,10 @@
 - The V2 profile does not install a custom global allocator. Upstream witness lookup maps and their random hashing are unchanged.
 - Fixture verification and byte equality are evidence for these cases, not a formal proof or a complete memory-safety audit. SIMD/FFT and reconstruction unsafe blocks require independent review before making this a release default.
 
+The [2026-11-12 scoped SIMD/FFT safety review](SAFETY-REVIEW-V2-2026-11-12.md)
+records the findings, remediations, Miri reproductions and permanent regression
+coverage. It is an agent-led review, not a separate third-party audit.
+
 ## Validation scope
 
 - Workspace: 44 unit tests, build, Clippy with warnings denied, formatting.

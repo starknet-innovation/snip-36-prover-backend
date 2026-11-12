@@ -61,12 +61,12 @@ index 386cf120..f0d2315d 100644
 @@ -132,7 +181,9 @@ where
          base_column_pool,
      );
- 
+
 -    commitment_scheme.set_store_polynomials_coefficients();
 +    if store_coefficients {
 +        commitment_scheme.set_store_polynomials_coefficients();
 +    }
- 
+
      // Grab the preprocessed root for the circuit hash before it is consumed by `commit_tree` below.
      let preprocessed_root: Blake2sHash = preprocessed_tree.commitment.root().into();
 @@ -143,7 +194,7 @@ where
@@ -81,7 +81,7 @@ index 386cf120..f0d2315d 100644
 @@ -151,6 +202,8 @@ where
          twiddles,
      );
- 
+
 +    drop(values);
 +
      let circuit_hash = compute_circuit_hash(
@@ -94,7 +94,7 @@ index 0c2d5e50..ae4ad4e7 100644
 @@ -320,6 +320,11 @@ impl<Value: IValue> FinalizedContext<Value> {
          self.context.values()
      }
- 
+
 +    /// Consume this proof's context, retaining only its padded witness values.
 +    pub fn into_values(self) -> Vec<Value> {
 +        self.context.values
@@ -133,11 +133,11 @@ index 6e9015e2..a9b9c562 100644
 @@ -16,6 +16,7 @@ use stwo::core::pcs::{TreeSubspan, TreeVec};
  use stwo::core::poly::circle::CanonicCoset;
  use stwo::core::utils::all_unique;
- 
+
 +use super::info::LogupCountPerRow;
  use super::preprocessed_columns::PreProcessedColumnId;
  use super::{EvalAtRow, InfoEvaluator, PREPROCESSED_TRACE_IDX, PointEvaluator};
- 
+
 @@ -108,10 +109,33 @@ pub struct FrameworkComponent<C: FrameworkEval> {
      pub(super) trace_locations: TreeVec<TreeSubspan>,
      pub(super) preprocessed_column_indices: Vec<usize>,
@@ -160,7 +160,7 @@ index 6e9015e2..a9b9c562 100644
 +        Self { mask_offsets, n_constraints, logup_counts }
 +    }
  }
- 
+
  impl<E: FrameworkEval> FrameworkComponent<E> {
 +    /// Per trace column, whether the constraints read it at a nonzero mask offset.
 +    pub(crate) fn shifted_columns(&self) -> TreeVec<Vec<bool>> {
@@ -180,7 +180,7 @@ index 6e9015e2..a9b9c562 100644
 -        Self { eval, trace_locations, info, preprocessed_column_indices, claimed_sum }
 +        Self { eval, trace_locations, info: info.into(), preprocessed_column_indices, claimed_sum }
      }
- 
+
      pub fn trace_locations(&self) -> &[TreeSubspan] {
 diff --git a/crates/constraint-framework/src/logup.rs b/crates/constraint-framework/src/logup.rs
 index a11cb690..4235020b 100644
@@ -189,7 +189,7 @@ index a11cb690..4235020b 100644
 @@ -39,6 +39,16 @@ impl<E: EvalAtRow> LogupAtRow<E> {
          }
      }
- 
+
 +    pub fn new_with_shift(
 +        interaction: usize,
 +        cumsum_shift: SecureField,
@@ -224,20 +224,18 @@ index a11cb690..4235020b 100644
 +            .fold(initial, |acc, (value, power)| acc + EF::from(*power) * value.clone())
              - EF::from(self.z)
      }
- 
+
 diff --git a/crates/constraint-framework/src/prover/component_prover.rs b/crates/constraint-framework/src/prover/component_prover.rs
-index a84795e1..f5626519 100644
+index a84795e1..483f416c 100644
 --- a/crates/constraint-framework/src/prover/component_prover.rs
 +++ b/crates/constraint-framework/src/prover/component_prover.rs
-@@ -11,18 +11,23 @@ use stwo::core::pcs::TreeVec;
+@@ -11,18 +11,21 @@ use stwo::core::pcs::TreeVec;
  use stwo::core::poly::circle::{CanonicCoset, CircleDomain};
  use stwo::core::utils::bit_reverse;
  use stwo::prover::backend::simd::SimdBackend;
 -use stwo::prover::backend::simd::column::VeryPackedSecureColumnByCoords;
 +use stwo::prover::backend::simd::circle::evaluate_block_into;
-+use stwo::prover::backend::simd::column::{
-+    BaseColumn, VeryPackedSecureColumnByCoords, VeryPackedSecureColumnByCoordsMutSlice,
-+};
++use stwo::prover::backend::simd::column::{BaseColumn, VeryPackedSecureColumnByCoordsMutSlice};
  use stwo::prover::backend::simd::m31::LOG_N_LANES;
  use stwo::prover::backend::simd::very_packed_m31::{LOG_N_VERY_PACKED_ELEMS, VeryPackedBaseField};
 -use stwo::prover::backend::{Backend, CpuBackend};
@@ -249,15 +247,15 @@ index a84795e1..f5626519 100644
  use stwo::prover::secure_column::SecureColumnByCoords;
  use stwo::prover::{ComponentProver, DomainEvaluationAccumulator, EvaluationMode, Poly, Trace};
  use tracing::{Level, span};
- 
+
  use super::{CpuDomainEvaluator, SimdDomainEvaluator};
 -use crate::{FrameworkComponent, FrameworkEval, PREPROCESSED_TRACE_IDX};
 +use crate::logup::LogupAtRow;
 +use crate::{FrameworkComponent, FrameworkEval, INTERACTION_TRACE_IDX, PREPROCESSED_TRACE_IDX};
- 
+
  const CHUNK_SIZE: usize = 1;
- 
-@@ -39,6 +44,7 @@ fn get_trace_columns<'a, B: Backend>(
+
+@@ -39,6 +42,7 @@ fn get_trace_columns<'a, B: Backend>(
      component_polys: TreeVec<Vec<&'a &Poly<B>>>,
      eval_domain: CircleDomain,
      mode: EvaluationMode,
@@ -265,7 +263,7 @@ index a84795e1..f5626519 100644
  ) -> TreeVec<Vec<Cow<'a, CircleEvaluation<B, BaseField, BitReversedOrder>>>> {
      match mode {
          EvaluationMode::SubDomain { .. } => {
-@@ -53,7 +59,14 @@ fn get_trace_columns<'a, B: Backend>(
+@@ -53,7 +57,14 @@ fn get_trace_columns<'a, B: Backend>(
          }
          EvaluationMode::ExtendToEvalDomain => {
              let _span = span!(Level::INFO, "Constraint Extension").entered();
@@ -281,7 +279,7 @@ index a84795e1..f5626519 100644
              #[cfg(not(feature = "parallel"))]
              {
                  component_polys.as_cols_ref().map_cols(|col| {
-@@ -80,13 +93,7 @@ fn get_constraint_quotient_inputs<'a, E: FrameworkEval, B: Backend>(
+@@ -80,13 +91,7 @@ fn get_constraint_quotient_inputs<'a, E: FrameworkEval, B: Backend>(
  ) -> ConstraintQuotientInputs<'a, B> {
      let max_constraint_log_degree_bound = component.max_constraint_log_degree_bound();
      let trace_domain = CanonicCoset::new(component.eval.log_size());
@@ -293,10 +291,10 @@ index a84795e1..f5626519 100644
 -        .map(|idx| &trace.polys[PREPROCESSED_TRACE_IDX][*idx])
 -        .collect();
 +    let component_polys = get_component_polys(component, trace);
- 
+
      let eval_domain = match mode {
          EvaluationMode::SubDomain { log_expansion } => {
-@@ -96,18 +103,52 @@ fn get_constraint_quotient_inputs<'a, E: FrameworkEval, B: Backend>(
+@@ -96,18 +101,52 @@ fn get_constraint_quotient_inputs<'a, E: FrameworkEval, B: Backend>(
              CanonicCoset::new(max_constraint_log_degree_bound).circle_domain()
          }
      };
@@ -320,7 +318,7 @@ index a84795e1..f5626519 100644
 +        .collect();
 +    component_polys
 +}
- 
+
 -    // Denom inverses.
 +/// The inverses of the trace domain's vanishing polynomial on the cosets of the evaluation
 +/// domain, bit-reversed.
@@ -334,7 +332,7 @@ index a84795e1..f5626519 100644
 -    ConstraintQuotientInputs { eval_domain, trace_domain, trace, denom_inv }
 +    denom_inv
  }
- 
+
 +/// Windowed components are evaluated over `2^LOG_N_BLOCKS` blocks of the evaluation domain
 +/// ([`FrameworkComponent::evaluate_in_blocks`]).
 +const LOG_N_BLOCKS: u32 = 2;
@@ -353,7 +351,7 @@ index a84795e1..f5626519 100644
  impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponent<E> {
      fn evaluate_constraint_quotients_on_domain(
          &self,
-@@ -117,6 +158,23 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
+@@ -117,6 +156,23 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
          if self.n_constraints() == 0 {
              return;
          }
@@ -374,13 +372,13 @@ index a84795e1..f5626519 100644
 +            }
 +            return self.evaluate_in_blocks(trace, evaluation_accumulator, log_n_blocks);
 +        }
- 
+
          let ConstraintQuotientInputs { eval_domain, trace_domain, trace, denom_inv } =
              get_constraint_quotient_inputs(self, trace, evaluation_accumulator.evaluation_mode());
-@@ -144,9 +202,52 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
+@@ -144,51 +200,245 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
              return;
          }
- 
+
 -        let col = unsafe { VeryPackedSecureColumnByCoords::transform_under_mut(accum.col) };
 +        let trace_cols = trace.as_cols_ref().map_cols(|c| c.as_ref());
 +        self.accumulate_rows(
@@ -394,7 +392,8 @@ index a84795e1..f5626519 100644
 +        );
 +    }
 +}
-+
+
+-        let range = 0..(1 << (eval_domain.log_size() - LOG_N_LANES - LOG_N_VERY_PACKED_ELEMS));
 +impl<E: FrameworkEval + Sync> FrameworkComponent<E> {
 +    /// The number of this component's trace columns that [`Self::evaluate_in_blocks`] evaluates
 +    /// block by block: those not read at a nonzero mask offset.
@@ -411,8 +410,7 @@ index a84795e1..f5626519 100644
 +            })
 +            .sum()
 +    }
- 
--        let range = 0..(1 << (eval_domain.log_size() - LOG_N_LANES - LOG_N_VERY_PACKED_ELEMS));
++
 +    /// Adds the constraint quotients of the rows of `col`: every row of the evaluation domain, or
 +    /// with `window` the rows of a window of a half coset (see
 +    /// [`SimdDomainEvaluator::window`]), in its natural order.
@@ -428,11 +426,18 @@ index a84795e1..f5626519 100644
 +        block: usize,
 +    ) {
 +        let range = 0..(col.len() >> (LOG_N_LANES + LOG_N_VERY_PACKED_ELEMS));
-+        let col = unsafe { VeryPackedSecureColumnByCoords::transform_under_mut(col) };
- 
+
          #[cfg(not(feature = "parallel"))]
-         let iter = range.step_by(CHUNK_SIZE).zip(col.chunks_mut(CHUNK_SIZE));
-@@ -157,38 +258,187 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
+-        let iter = range.step_by(CHUNK_SIZE).zip(col.chunks_mut(CHUNK_SIZE));
++        let iter = range.step_by(CHUNK_SIZE).zip(col.very_packed_chunks_mut(CHUNK_SIZE));
+
+         #[cfg(feature = "parallel")]
+-        let iter = range.into_par_iter().step_by(CHUNK_SIZE).zip(col.par_chunks_mut(CHUNK_SIZE));
++        let iter = range
++            .into_par_iter()
++            .step_by(CHUNK_SIZE)
++            .zip(col.par_very_packed_chunks_mut(CHUNK_SIZE));
+
          // Define any `self` values outside the loop to prevent the compiler thinking there is a
          // `Sync` requirement on `Self`.
          let self_eval = &self.eval;
@@ -447,7 +452,7 @@ index a84795e1..f5626519 100644
 +        // natural row is the top bit of the bit-reversed one, which picks the denominator.
 +        let window_denom_inv = window
 +            .map(|_| VeryPackedBaseField::from_array(std::array::from_fn(|i| denom_inv[i & 1])));
- 
+
 +        let body = |fracs: &mut Vec<_>,
 +                    (chunk_idx, mut chunk): (usize, VeryPackedSecureColumnByCoordsMutSlice<'_>)| {
              for idx_in_chunk in 0..CHUNK_SIZE {
@@ -480,7 +485,7 @@ index a84795e1..f5626519 100644
 +                let row_res = eval.row_res;
 +                *fracs = std::mem::take(&mut eval.logup.fracs);
 +                fracs.clear();
- 
+
                  // Finalize row.
                  unsafe {
 -                    let row_denom_inv = VeryPackedBaseField::broadcast(
@@ -636,7 +641,92 @@ index a84795e1..f5626519 100644
 +        }
      }
  }
- 
+
+@@ -266,3 +516,84 @@ fn accumulate_pointwise_cpu<E: FrameworkEval>(
+     }
+     res
+ }
++
++#[cfg(test)]
++mod safety_review_tests {
++    use super::*;
++    use crate::{EvalAtRow, TraceLocationAllocator};
++
++    struct WithShift(u32);
++    impl FrameworkEval for WithShift {
++        fn log_size(&self) -> u32 {
++            self.0
++        }
++        fn max_constraint_log_degree_bound(&self) -> u32 {
++            self.0 + 1
++        }
++        fn evaluate<T: EvalAtRow>(&self, mut eval: T) -> T {
++            let a = eval.next_trace_mask();
++            let [prev, cur, next] = eval.next_interaction_mask(1, [-1, 0, 1]);
++            eval.add_constraint(a + prev + next - cur);
++            eval
++        }
++    }
++
++    #[test]
++    fn blocked_constraints_match_full_cpu_with_shifted_columns() {
++        let n = 19; // Eval domain 2^20 activates the block path used by large components.
++        let domain = CanonicCoset::new(n).circle_domain();
++        let extended = CanonicCoset::new(n + 1).circle_domain();
++        let component = FrameworkComponent::new(
++            &mut TraceLocationAllocator::default(),
++            WithShift(n),
++            SecureField::from(0),
++        );
++        let simd_twiddles = SimdBackend::precompute_twiddles(extended.half_coset);
++        let cpu_twiddles = CpuBackend::precompute_twiddles(extended.half_coset);
++        let values =
++            (0..1usize << n).map(|i| BaseField::from(i * i + 13 * i + 1)).collect::<Vec<_>>();
++        let cpu_coeffs = CircleEvaluation::<CpuBackend, BaseField, BitReversedOrder>::new(
++            domain,
++            values.clone(),
++        )
++        .interpolate();
++        let cpu_polys = [
++            Poly::new(Some(cpu_coeffs.clone()), cpu_coeffs.evaluate(extended)),
++            Poly::new(Some(cpu_coeffs.clone()), cpu_coeffs.evaluate(extended)),
++        ];
++        let simd_coeffs = CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(
++            domain,
++            BaseColumn::from_cpu(&values),
++        )
++        .interpolate();
++        let simd_polys = [
++            Poly::new(Some(simd_coeffs.clone()), simd_coeffs.evaluate(extended)),
++            Poly::new(Some(simd_coeffs.clone()), simd_coeffs.evaluate(extended)),
++        ];
++        let cpu_trace = Trace {
++            polys: TreeVec::new(vec![vec![], cpu_polys.iter().collect()]),
++            twiddles: Some(&cpu_twiddles),
++        };
++        let simd_trace = Trace {
++            polys: TreeVec::new(vec![vec![], simd_polys.iter().collect()]),
++            twiddles: Some(&simd_twiddles),
++        };
++        let mut cpu = DomainEvaluationAccumulator::new(
++            SecureField::from(9),
++            n + 1,
++            1,
++            EvaluationMode::ExtendToEvalDomain,
++        );
++        let mut simd = DomainEvaluationAccumulator::new(
++            SecureField::from(9),
++            n + 1,
++            1,
++            EvaluationMode::ExtendToEvalDomain,
++        );
++        <FrameworkComponent<_> as ComponentProver<CpuBackend>>::evaluate_constraint_quotients_on_domain(&component, &cpu_trace, &mut cpu);
++        <FrameworkComponent<_> as ComponentProver<SimdBackend>>::evaluate_constraint_quotients_on_domain(&component, &simd_trace, &mut simd);
++        let cpu = cpu.into_sub_accumulations().pop().unwrap().unwrap().to_cpu();
++        let simd = simd.into_sub_accumulations().pop().unwrap().unwrap().to_cpu();
++        assert_eq!(cpu.columns, simd.columns);
++    }
++}
 diff --git a/crates/constraint-framework/src/prover/logup.rs b/crates/constraint-framework/src/prover/logup.rs
 index 23ffdd77..61a68fc7 100644
 --- a/crates/constraint-framework/src/prover/logup.rs
@@ -644,7 +734,7 @@ index 23ffdd77..61a68fc7 100644
 @@ -66,6 +66,65 @@ impl LogupTraceGenerator {
          col_gen.finalize_col();
      }
- 
+
 +    /// Generate consecutive logup columns in one pass over row chunks.
 +    /// The closure returns (numerator, denominator) for a column and packed row.
 +    pub fn write_frac_cols(
@@ -708,10 +798,18 @@ index 23ffdd77..61a68fc7 100644
      pub fn col_from_par_iter(
          &mut self,
 diff --git a/crates/constraint-framework/src/prover/simd_domain.rs b/crates/constraint-framework/src/prover/simd_domain.rs
-index 030db0d0..19267cb8 100644
+index 030db0d0..4d5f9726 100644
 --- a/crates/constraint-framework/src/prover/simd_domain.rs
 +++ b/crates/constraint-framework/src/prover/simd_domain.rs
-@@ -31,6 +31,14 @@ pub struct SimdDomainEvaluator<'a> {
+@@ -8,7 +8,6 @@ use stwo::core::pcs::TreeVec;
+ use stwo::core::utils::offset_bit_reversed_circle_domain_index;
+ use stwo::prover::backend::Column;
+ use stwo::prover::backend::simd::SimdBackend;
+-use stwo::prover::backend::simd::column::VeryPackedBaseColumn;
+ use stwo::prover::backend::simd::m31::LOG_N_LANES;
+ use stwo::prover::backend::simd::very_packed_m31::{
+     LOG_N_VERY_PACKED_ELEMS, VeryPackedBaseField, VeryPackedSecureField,
+@@ -31,6 +30,14 @@ pub struct SimdDomainEvaluator<'a> {
      pub constraint_index: usize,
      pub domain_log_size: u32,
      pub eval_domain_log_size: u32,
@@ -726,7 +824,7 @@ index 030db0d0..19267cb8 100644
      pub logup: LogupAtRow<Self>,
  }
  impl<'a> SimdDomainEvaluator<'a> {
-@@ -55,9 +63,55 @@ impl<'a> SimdDomainEvaluator<'a> {
+@@ -55,9 +62,55 @@ impl<'a> SimdDomainEvaluator<'a> {
              constraint_index: 0,
              domain_log_size,
              eval_domain_log_size: eval_log_size,
@@ -782,11 +880,20 @@ index 030db0d0..19267cb8 100644
  }
  impl EvalAtRow for SimdDomainEvaluator<'_> {
      type F = VeryPackedBaseField;
-@@ -78,21 +132,38 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
-                     let col =
-                         &self.trace_eval.get_unchecked(interaction).get_unchecked(col_index).values;
-                     let very_packed_col = VeryPackedBaseColumn::transform_under_ref(col);
+@@ -74,25 +127,43 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
+         offsets.map(|off| {
+             // If the offset is 0, we can just return the value directly from this row.
+             if off == 0 {
+-                unsafe {
+-                    let col =
+-                        &self.trace_eval.get_unchecked(interaction).get_unchecked(col_index).values;
+-                    let very_packed_col = VeryPackedBaseColumn::transform_under_ref(col);
 -                    return *very_packed_col.data.get_unchecked(self.vec_row);
++                {
++                    let col = &self.trace_eval[interaction][col_index].values;
++                    // Slice casts preserve the byte extent, unlike reinterpreting a Vec
++                    // whose original length counts the smaller packed elements.
++                    let values = col.as_very_packed_slice();
 +                    let vec_row = match self.window {
 +                        Some((first, _)) => self.vec_row + first,
 +                        None if self.block != 0 && col.len() == 1 << self.eval_domain_log_size => {
@@ -794,7 +901,7 @@ index 030db0d0..19267cb8 100644
 +                        }
 +                        None => self.vec_row,
 +                    };
-+                    return *very_packed_col.data.get_unchecked(vec_row);
++                    return values[vec_row];
                  };
              }
              // Otherwise, we need to look up the value at the offset.
@@ -831,10 +938,10 @@ index 030db0d0..19267cb8 100644
          })
      }
      fn add_constraint<G>(&mut self, constraint: G)
-@@ -109,5 +180,97 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
+@@ -109,5 +180,127 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
          VeryPackedSecureField::from_very_packed_m31s(values)
      }
- 
+
 -    crate::logup_proxy!();
 +    fn write_logup_frac(&mut self, fraction: Fraction<Self::EF, Self::EF>) {
 +        if self.logup.fracs.is_empty() {
@@ -929,6 +1036,86 @@ index 030db0d0..19267cb8 100644
 +            offset
 +        )));
 +    rows
++}
++
++#[cfg(test)]
++mod safety_review_tests {
++    use super::*;
++
++    #[test]
++    fn vector_offsets_match_scalar_at_domain_boundaries() {
++        for eval_log in [6, 10, 20, 30] {
++            for trace_log in [eval_log - 1, eval_log - 3] {
++                let len = 1usize << eval_log;
++                for first in [0, 32, len / 2 - 32, len / 2, len - 32] {
++                    for offset in [-12345, -1, 1, 12345] {
++                        let rows = offset_rows(first, trace_log, eval_log, offset);
++                        for (lane, row) in rows.into_iter().enumerate() {
++                            assert_eq!(
++                                row as usize,
++                                offset_bit_reversed_circle_domain_index(
++                                    first + lane,
++                                    trace_log,
++                                    eval_log,
++                                    offset
++                                )
++                            );
++                        }
++                    }
++                }
++            }
++        }
++    }
+ }
+diff --git a/crates/examples/src/xor/gkr_lookups/mle_eval.rs b/crates/examples/src/xor/gkr_lookups/mle_eval.rs
+index 76b79ccd..d8157c94 100644
+--- a/crates/examples/src/xor/gkr_lookups/mle_eval.rs
++++ b/crates/examples/src/xor/gkr_lookups/mle_eval.rs
+@@ -18,7 +18,7 @@ use stwo::core::pcs::{TreeSubspan, TreeVec};
+ use stwo::core::poly::circle::CanonicCoset;
+ use stwo::core::utils::{bit_reverse, bit_reverse_index, coset_index_to_circle_domain_index};
+ use stwo::prover::backend::simd::SimdBackend;
+-use stwo::prover::backend::simd::column::{SecureColumn, VeryPackedSecureColumnByCoords};
++use stwo::prover::backend::simd::column::SecureColumn;
+ use stwo::prover::backend::simd::m31::LOG_N_LANES;
+ use stwo::prover::backend::simd::prefix_sum::inclusive_prefix_sum;
+ use stwo::prover::backend::simd::qm31::PackedSecureField;
+@@ -194,7 +194,9 @@ impl<O: MleCoeffColumnOracle> Component for MleEvalProverComponent<'_, '_, O> {
+     }
+ }
+
+-impl<O: MleCoeffColumnOracle> ComponentProver<SimdBackend> for MleEvalProverComponent<'_, '_, O> {
++impl<O: MleCoeffColumnOracle + Sync> ComponentProver<SimdBackend>
++    for MleEvalProverComponent<'_, '_, O>
++{
+     fn evaluate_constraint_quotients_on_domain(
+         &self,
+         trace: &Trace<'_, SimdBackend>,
+@@ -236,12 +238,13 @@ impl<O: MleCoeffColumnOracle> ComponentProver<SimdBackend> for MleEvalProverComp
+         // Accumulator.
+         let [mut acc] = accumulator.columns([(eval_domain.log_size(), self.n_constraints())]);
+         acc.random_coeff_powers.reverse();
+-        let acc_col = unsafe { VeryPackedSecureColumnByCoords::transform_under_mut(acc.col) };
++        let chunks = acc.col.very_packed_chunks_mut(1);
+
+         let _span = span!(Level::INFO, "Constraint pointwise eval").entered();
+         let n_very_packed_rows =
+             1 << (eval_domain.log_size() - LOG_N_LANES - LOG_N_VERY_PACKED_ELEMS);
+-        for vec_row in 0..n_very_packed_rows {
++        assert_eq!(chunks.len(), n_very_packed_rows);
++        for (vec_row, mut chunk) in chunks.enumerate() {
+             // Evaluate constrains at row.
+             let mut eval = SimdDomainEvaluator::new(
+                 &component_trace,
+@@ -273,7 +276,8 @@ impl<O: MleCoeffColumnOracle> ComponentProver<SimdBackend> for MleEvalProverComp
+                 denom_inv
+                     [vec_row >> (trace_domain.log_size() - LOG_N_LANES - LOG_N_VERY_PACKED_ELEMS)],
+             );
+-            unsafe { acc_col.set_packed(vec_row, acc_col.packed_at(vec_row) + row_res * denom_inv) }
++            // SAFETY: the checked coordinate slices each contain one very-packed row.
++            unsafe { chunk.set_packed(0, chunk.packed_at(0) + row_res * denom_inv) }
+         }
+     }
  }
 diff --git a/crates/privacy_prove/src/consts.rs b/crates/privacy_prove/src/consts.rs
 index 6894a34d..e08ebf1d 100644
@@ -944,7 +1131,7 @@ index 6894a34d..e08ebf1d 100644
      opt_n_id_to_big_components: Some(1),
      lifting_size_policy: LiftingSizePolicy::Fixed(CAIRO_PCS_CONFIG.trace_lifting_log_size),
  };
- 
+
 -pub const CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS: bool = true;
 +pub const CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS: bool = false;
 diff --git a/crates/privacy_prove/src/lib.rs b/crates/privacy_prove/src/lib.rs
@@ -957,7 +1144,7 @@ index da8b88a7..089d4f20 100644
  use std::rc::Rc;
 -use std::sync::Arc;
 +use std::sync::{Arc, LazyLock};
- 
+
  use anyhow::Result;
  use cairo_program_runner_lib::types::{
 @@ -22,7 +22,7 @@ use circuit_cairo_verifier::verify::{
@@ -972,7 +1159,7 @@ index da8b88a7..089d4f20 100644
 @@ -68,14 +68,17 @@ use crate::consts::{
      CAIRO_PROVER_PARAMS, CAIRO_RUN_CONFIG, CIRCUIT_STORE_POLYNOMIALS_COEFFICIENTS,
  };
- 
+
 +/// Lazily initialized, process-owned preprocessing. Ordinary RAII releases it on drop.
 +pub type LazyPrecompute<T> = LazyLock<T, Box<dyn FnOnce() -> T + Send + Sync>>;
 +
@@ -996,14 +1183,14 @@ index da8b88a7..089d4f20 100644
 @@ -105,14 +108,13 @@ pub fn prepare_recursive_prover_precomputes()
  -> Result<Arc<RecursiveProverPrecomputes>, Box<dyn Error>> {
      let _span = span!(Level::INFO, "prepare_privacy_recursiveprover_precomputes").entered();
- 
+
 -    let cairo_verifier_config = get_cairo_verifier_config()?;
 -    let preprocessed_circuit = get_cairo_preprocessed_circuit(&cairo_verifier_config);
 +    let cairo_verifier_config = Arc::new(get_cairo_verifier_config()?);
      let circuit_config =
          get_recursive_circuit_config(&PRIVACY_RECURSION_CIRCUIT_PREPROCESSED_ROOT)?;
      let proof_config = get_proof_config(&PRIVACY_RECURSION_CIRCUIT_PREPROCESSED_ROOT)?;
- 
+
      info!("Prepare the twiddles");
 -    let base_column_pool = BaseColumnPool::<SimdBackend>::new();
 +    let base_column_pool = Arc::new(BaseColumnPool::<SimdBackend>::new());
@@ -1011,7 +1198,7 @@ index da8b88a7..089d4f20 100644
      else {
          panic!("Only LiftingSizePolicy::Fixed is supported with a precomputed preprocessed tree");
 @@ -121,45 +123,39 @@ pub fn prepare_recursive_prover_precomputes()
- 
+
      // Precompute twiddles.
      let max_domain_size = max(cairo_lifting_log_size, circuit_lifting_log_size);
 -    let twiddles = SimdBackend::precompute_twiddles(
@@ -1019,7 +1206,7 @@ index da8b88a7..089d4f20 100644
          CanonicCoset::new(max_domain_size).circle_domain().half_coset,
 -    );
 +    ));
- 
+
      info!("Prepare the cairo prover preprocessed trace and tree");
      let cairo_preprocessed_trace =
          Arc::new(CAIRO_PROVER_PARAMS.preprocessed_trace.to_preprocessed_trace());
@@ -1068,7 +1255,7 @@ index da8b88a7..089d4f20 100644
 +            &tree_pool,
 +        )
 +    }));
- 
+
      Ok(Arc::new(RecursiveProverPrecomputes {
          base_column_pool,
          twiddles,
@@ -1079,7 +1266,7 @@ index da8b88a7..089d4f20 100644
          preprocessed_circuit,
 @@ -206,16 +202,33 @@ pub fn privacy_recursive_prove(
      let (prover_input, output_preimage) = run_privacy_bootloader(pie)?;
- 
+
      info!("Generate the cairo proof");
 +    // Own this tree per proof so its evaluations can be reused by the circuit leg.
 +    let cairo_polys = SimdBackend::interpolate_columns(
@@ -1109,7 +1296,7 @@ index da8b88a7..089d4f20 100644
      info!("Prepare the cairo proof for the cairo-circuit verifier");
      let (proof, serialized_aux_data) = prepare_cairo_proof_for_circuit_verifier(&cairo_proof);
 +    drop(cairo_proof);
- 
+
      info!("Build the cairo-circuit verifier context");
      let output_hash = compute_privacy_bootloader_output_hash(&output_preimage);
 @@ -229,10 +242,10 @@ pub fn privacy_recursive_prove(
@@ -1118,7 +1305,7 @@ index da8b88a7..089d4f20 100644
      pad_context(&mut context);
 -    let context_values = context.values();
 +    let context_values = context.into_values();
- 
+
      info!("Prove the cairo-circuit verifier");
 -    let circuit_proof = prove_circuit_with_precompute(
 +    let circuit_proof = prove_circuit_with_precompute_owned(
@@ -1154,12 +1341,12 @@ index 8b71e059..cc2db780 100644
 +++ b/crates/stwo/src/prover/air/accumulation.rs
 @@ -5,6 +5,8 @@
  //!   f(p) = sum_i alpha^{N-1-i} u_i(P).
- 
+
  use itertools::Itertools;
 +#[cfg(feature = "parallel")]
 +use rayon::prelude::*;
  use tracing::{Level, span};
- 
+
  use crate::core::air::Component;
 @@ -99,6 +101,35 @@ impl<B: Backend> DomainEvaluationAccumulator<B> {
      /// For each entry, a [ColumnAccumulator] is returned, expecting to accumulate `n_cols`
@@ -1200,7 +1387,7 @@ index 8b71e059..cc2db780 100644
 @@ -168,10 +199,17 @@ impl<B: Backend> DomainEvaluationAccumulator<B> {
              };
              let twiddles_ref = owned_twiddles.as_ref().unwrap_or(twiddles);
- 
+
 -            SecureCirclePoly(eval.columns.map(|c| {
 +            // The four coordinate columns are interpolated concurrently: each IFFT is parallel on
 +            // its own, but one column at a time leaves most threads idle.
@@ -1237,7 +1424,7 @@ index 699fbef8..0a2fd404 100644
 @@ -18,7 +18,7 @@ use crate::prover::secure_column::SecureColumnByCoords;
  /// Type alias for the weights hash map used in barycentric eval_at_point.
  pub type WeightsHashMap<B> = DashMap<(u32, CirclePoint<SecureField>), SecureColumnByCoords<B>>;
- 
+
 -pub trait ComponentProver<B: Backend>: Component {
 +pub trait ComponentProver<B: Backend>: Component + Sync {
      /// Evaluates the constraint quotients of the component on the evaluation domain.
@@ -1271,7 +1458,7 @@ index 699fbef8..0a2fd404 100644
 +pub fn source_column<B: Backend>(source: &dyn TraceSource) -> Col<B, BaseField> {
 +    Col::<B, BaseField>::from_fill(1 << source.log_size(), &|dst| source.write_values(dst))
  }
- 
+
  /// A struct for representing a polynomial corresponding to a trace column.
  /// A polynomial is defined by it's evaluations on a circle domain of size at least it's degree,
  /// and optionally its coefficients in the FFT basis.
@@ -1282,7 +1469,7 @@ index 699fbef8..0a2fd404 100644
      pub evals: CircleEvaluation<B, BaseField, BitReversedOrder>,
 +    pub source: Option<SharedTraceSource>,
  }
- 
+
  impl<B: Backend> Poly<B> {
 @@ -47,7 +73,43 @@ impl<B: Backend> Poly<B> {
          coeffs: Option<CircleCoefficients<B>>,
@@ -1327,7 +1514,7 @@ index 699fbef8..0a2fd404 100644
 +        evals.domain = self.evals.domain;
 +        std::borrow::Cow::Owned(evals)
      }
- 
+
      pub fn eval_at_point(
 @@ -57,6 +119,10 @@ impl<B: Backend> Poly<B> {
      ) -> SecureField {
@@ -1343,7 +1530,7 @@ index 699fbef8..0a2fd404 100644
 @@ -67,6 +133,44 @@ impl<B: Backend> Poly<B> {
          }
      }
- 
+
 +    /// The coefficients of a striped column that holds only stripe 0 (its evaluation on the
 +    /// first subdomain of the coefficients' size), interpolated from it.
 +    pub fn regrown_coefficients(&self) -> CircleCoefficients<B> {
@@ -1495,7 +1682,7 @@ index 699fbef8..0a2fd404 100644
      }
  }
 diff --git a/crates/stwo/src/prover/backend/mod.rs b/crates/stwo/src/prover/backend/mod.rs
-index 0d46d7f9..96dd66a2 100644
+index 0d46d7f9..f0657784 100644
 --- a/crates/stwo/src/prover/backend/mod.rs
 +++ b/crates/stwo/src/prover/backend/mod.rs
 @@ -51,6 +51,15 @@ pub trait Column<T>: Clone + Debug + FromIterator<T> + Send + Sync {
@@ -1514,7 +1701,7 @@ index 0d46d7f9..96dd66a2 100644
      /// Returns the length of the column.
      fn len(&self) -> usize;
      /// Returns true if the column is empty.
-@@ -63,4 +72,23 @@ pub trait Column<T>: Clone + Debug + FromIterator<T> + Send + Sync {
+@@ -63,4 +72,21 @@ pub trait Column<T>: Clone + Debug + FromIterator<T> + Send + Sync {
      fn set(&mut self, index: usize, value: T);
      /// Splits the column into two halves.
      fn split_at_mid(self) -> (Self, Self);
@@ -1523,10 +1710,8 @@ index 0d46d7f9..96dd66a2 100644
 +    fn truncate(&mut self, _len: usize) -> bool {
 +        false
 +    }
-+    /// Lengthens the column to `len` elements within its existing allocation, the new elements
-+    /// being uninitialized as after [`Self::uninitialized`] (the caller writes them before reading
-+    /// them), and returns whether it did; a backend that does not support it leaves the column as
-+    /// it was.
++    /// Lengthens the column within its existing allocation, initializing new elements to zero.
++    /// Returns false without changing the column if the backend cannot grow it.
 +    fn grow(&mut self, _len: usize) -> bool {
 +        false
 +    }
@@ -1547,7 +1732,7 @@ index 057d6f22..a625a252 100644
 +use itertools::Itertools;
 +#[cfg(feature = "parallel")]
 +use rayon::prelude::*;
- 
+
  use crate::core::fields::qm31::SecureField;
  use crate::prover::AccumulationOps;
  use crate::prover::backend::CpuBackend;
@@ -1560,7 +1745,7 @@ index 057d6f22..a625a252 100644
 @@ -49,29 +51,40 @@ impl AccumulationOps for SimdBackend {
          let first = cols_iter.next()?;
          assert!(!first.is_empty(), "Columns should be non-empty");
- 
+
 +        // Rows are processed by chunks, in parallel when the `parallel` feature is on: every
 +        // chunk only reads the smaller accumulation and writes its own rows.
 +        const CHUNK_SIZE: usize = 1 << 8;
@@ -1619,18 +1804,18 @@ index 818d38e9..ac2dd0e6 100644
 --- a/crates/stwo/src/prover/backend/simd/blake2s.rs
 +++ b/crates/stwo/src/prover/backend/simd/blake2s.rs
 @@ -3,7 +3,7 @@
- 
+
  use std::array;
  use std::mem::transmute;
 -use std::simd::u32x16;
 +use std::simd::{simd_swizzle, u32x8, u32x16};
- 
+
  use bytemuck::cast_slice;
  use itertools::Itertools;
 @@ -339,57 +339,122 @@ pub fn untranspose_states(mut states: [u32x16; 8]) -> [u32x16; 8] {
      states
  }
- 
+
 -/// Compresses 16 blake2s instances.
 -pub fn compress16(
 -    h_vecs: [u32x16; 8],
@@ -1726,7 +1911,7 @@ index 818d38e9..ac2dd0e6 100644
 +        u32x8::splat(IV[6]) ^ pick(lastblock),
 +        u32x8::splat(IV[7]) ^ pick(lastnode),
      ];
- 
+
 -    round(&mut v, msg_vecs, 0);
 -    round(&mut v, msg_vecs, 1);
 -    round(&mut v, msg_vecs, 2);
@@ -1747,7 +1932,7 @@ index 818d38e9..ac2dd0e6 100644
 +    round8::<7>(&mut v, &m);
 +    round8::<8>(&mut v, &m);
 +    round8::<9>(&mut v, &m);
- 
+
      [
 -        h_vecs[0] ^ v[0] ^ v[8],
 -        h_vecs[1] ^ v[1] ^ v[9],
@@ -1767,7 +1952,7 @@ index 818d38e9..ac2dd0e6 100644
 +        h[7] ^ v[7] ^ v[15],
      ]
  }
- 
+
 +/// Compresses 16 blake2s instances.
 +pub fn compress16(
 +    h_vecs: [u32x16; 8],
@@ -1790,7 +1975,7 @@ index 818d38e9..ac2dd0e6 100644
  mod tests {
      use std::array;
 diff --git a/crates/stwo/src/prover/backend/simd/blake2s_lifted.rs b/crates/stwo/src/prover/backend/simd/blake2s_lifted.rs
-index fef756f8..c04601e7 100644
+index fef756f8..eca92402 100644
 --- a/crates/stwo/src/prover/backend/simd/blake2s_lifted.rs
 +++ b/crates/stwo/src/prover/backend/simd/blake2s_lifted.rs
 @@ -1,8 +1,8 @@
@@ -1798,22 +1983,38 @@ index fef756f8..c04601e7 100644
 -use std::mem::transmute;
 +use std::collections::HashMap;
  use std::simd::u32x16;
- 
+
 -use bytemuck::cast_slice;
 +use bytemuck::{cast_slice, cast_slice_mut};
  use itertools::Itertools;
  use num_traits::Zero;
  #[cfg(feature = "parallel")]
-@@ -32,6 +32,8 @@ const N_FELTS_IN_BLAKE_MESSAGE: usize = 16;
+@@ -13,7 +13,6 @@ use super::m31::LOG_N_LANES;
+ use super::utils::to_lifted_simd;
+ use crate::core::fields::m31::{BaseField, N_BYTES_FELT};
+ use crate::core::fields::qm31::SECURE_EXTENSION_DEGREE;
+-use crate::core::utils::uninit_vec;
+ use crate::core::vcs::blake2_hash::Blake2sHash;
+ use crate::core::vcs_lifted::blake2_merkle::Blake2sMerkleHasher;
+ use crate::core::vcs_lifted::merkle_hasher::MerkleHasherLifted;
+@@ -32,6 +31,8 @@ const N_FELTS_IN_BLAKE_MESSAGE: usize = 16;
  const N_FELTS_IN_BLAKE_STATE: usize = 8;
  const N_BYTES_IN_BLAKE_MESSAGE: u64 = N_FELTS_IN_BLAKE_MESSAGE as u64 * N_BYTES_FELT as u64;
  const LOG_N_HASHES_PER_SIMD_STATE: u32 = 4;
 +/// Number of packed output rows that are handled by a task of [`SimdBackend::pack_leaves_input`].
 +const ROWS_PER_PACK_TASK: usize = 512;
- 
+
  impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
      /// See the docs of [`crate::prover::backend::cpu::blake2s_lifted`].
-@@ -58,172 +60,38 @@ impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
+@@ -42,7 +43,6 @@ impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
+     ///
+     /// If the length of a smallest column (e.g. the first) is smaller than `N_LANES`, the
+     /// implementation falls back to the CPU implementation.
+-    #[allow(clippy::uninit_vec)]
+     fn build_leaves(
+         columns: &[&Col<Self, BaseField>],
+         lifting_log_size: u32,
+@@ -58,177 +58,45 @@ impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
                  lifting_log_size,
              );
          }
@@ -1882,7 +2083,7 @@ index fef756f8..c04601e7 100644
 -                    )
 -                });
 +        let plan = LeavesPlan::new(columns);
- 
+
 -                *state = compress_unfinalized(prev_state, msgs, local_byte_count);
 -                // Deal with the subsequent chunks in columns[start + 16..end]`. Note that since
 -                // `start < end` and both are multiples of 16, we have `start + 16 <= end`,
@@ -1949,9 +2150,8 @@ index fef756f8..c04601e7 100644
 +        let hashes_per_state = N_HASHES_PER_SIMD_STATE << extra_log_ratio;
          // Safety: we never read from `res`, only write to it.
 -        let mut res =
-+        let mut res: Vec<Blake2sHash> =
-             unsafe { uninit_vec(1 << (lifting_log_size_packed + LOG_N_HASHES_PER_SIMD_STATE)) };
- 
+-            unsafe { uninit_vec(1 << (lifting_log_size_packed + LOG_N_HASHES_PER_SIMD_STATE)) };
+-
 -        // Lift the next_layer_states if needed.
 -        let mut transposed_states = if lifting_log_size_packed == max_log_size {
 -            next_layer_states
@@ -1989,6 +2189,12 @@ index fef756f8..c04601e7 100644
 -            let dst: &mut [Blake2sHash; 16] = dst.try_into().unwrap();
 -            *dst = unsafe { transmute::<[u32x16; 8], [Blake2sHash; 16]>(untransposed) };
 -        });
++        let mut res: Vec<Blake2sHash> = vec![
++            Blake2sHash::default();
++            1 << (lifting_log_size_packed
++                + LOG_N_HASHES_PER_SIMD_STATE)
++        ];
++
 +        chunks_mut_iter(&mut res, TILE * hashes_per_state).enumerate().for_each(
 +            |(tile_index, dst_tile)| {
 +                let first_state = tile_index * TILE;
@@ -2010,13 +2216,21 @@ index fef756f8..c04601e7 100644
 +                }
 +            },
 +        );
- 
+
          res
      }
-@@ -243,24 +111,554 @@ impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
+
+-    #[allow(clippy::uninit_vec)]
+     fn build_next_layer(prev_layer: &Vec<Blake2sHash>) -> Vec<Blake2sHash> {
+         // The log size of the current layer that needs to be built.
+         let log_size: u32 = prev_layer.len().ilog2() - 1;
+@@ -241,26 +109,556 @@ impl MerkleOpsLifted<Blake2sMerkleHasher> for SimdBackend {
+         }
+         // Safety: no index in `res` is ever read without having been written to
          // before.
-         let mut res: Vec<Blake2sHash> = unsafe { uninit_vec(1 << log_size) };
- 
+-        let mut res: Vec<Blake2sHash> = unsafe { uninit_vec(1 << log_size) };
++        let mut res: Vec<Blake2sHash> = vec![Blake2sHash::default(); 1 << log_size];
+
 -        #[cfg(not(feature = "parallel"))]
 -        let iter = res.chunks_mut(1 << LOG_N_LANES);
 -        #[cfg(feature = "parallel")]
@@ -2041,7 +2255,6 @@ index fef756f8..c04601e7 100644
 +    /// Builds the leaves and the first [`FUSED_LEVELS`] inner layers together: every tile of
 +    /// [`TILE`] states is hashed, and then reduced to a single state, while it is still resident in
 +    /// the L1 cache, instead of being written, read back, and transposed once per layer.
-+    #[allow(clippy::uninit_vec)]
 +    fn build_layers(
 +        columns: &[&Col<Self, BaseField>],
 +        lifting_log_size: u32,
@@ -2062,7 +2275,9 @@ index fef756f8..c04601e7 100644
 +
 +        // Safety: no index in the layers is ever read without having been written to before.
 +        let [mut l0, mut l1, mut l2, mut l3, mut l4, mut l5]: [Vec<Blake2sHash>; 6] =
-+            array::from_fn(|level| unsafe { uninit_vec(1 << (lifting_log_size - level as u32)) });
++            array::from_fn(|level| {
++                vec![Blake2sHash::default(); 1 << (lifting_log_size - level as u32)]
++            });
 +        let chunk = N_HASHES_PER_SIMD_STATE;
 +        chunks_mut_iter(&mut l0, chunk * TILE)
 +            .zip(chunks_mut_iter(&mut l1, chunk * TILE / 2))
@@ -2335,7 +2550,6 @@ index fef756f8..c04601e7 100644
 +        Self::plan(columns, true)
 +    }
 +
-+    #[allow(clippy::uninit_vec)]
 +    fn plan(columns: &'a [&'a Col<SimdBackend, BaseField>], compute_lower_states: bool) -> Self {
 +        // Note that, in this function, all variables that track log sizes
 +        // refer to the "size" in terms of PackedM31 (e.g. the log size of a column
@@ -2389,9 +2603,9 @@ index fef756f8..c04601e7 100644
 +        // Safety: no index in `next_layer_states` and `prev_layer_states` is ever read without
 +        // having been written to before.
 +        let mut prev_layer_states: Vec<[u32x16; N_FELTS_IN_BLAKE_STATE]> =
-+            unsafe { uninit_vec(lower_len) };
++            vec![INITIAL_STATE; lower_len];
 +        let mut next_layer_states: Vec<[u32x16; N_FELTS_IN_BLAKE_STATE]> =
-+            unsafe { uninit_vec(lower_len) };
++            vec![INITIAL_STATE; lower_len];
 +
 +        // `None` stands for the initial state of the hash.
 +        let mut prev_log_size: Option<u32> = None;
@@ -2575,12 +2789,17 @@ index fef756f8..c04601e7 100644
 +        words.copy_from_slice(&vector.to_array());
 +    }
  }
- 
+
  impl PackLeavesOps for SimdBackend {
-@@ -278,21 +676,33 @@ impl PackLeavesOps for SimdBackend {
- 
+@@ -274,25 +672,37 @@ impl PackLeavesOps for SimdBackend {
+         let output_packed_len = output_len.div_ceil(N_LANES);
+
+         let mut packed_simd: [Vec<PackedBaseField>; SECURE_EXTENSION_DEGREE * PACKED_LEAF_SIZE] =
+-            unsafe { core::array::from_fn(|_| uninit_vec(output_packed_len)) };
++            core::array::from_fn(|_| vec![PackedBaseField::zero(); output_packed_len]);
+
          let output_packed_len_floor = output_len / N_LANES;
- 
+
 -        // TODO(Leo): parallelize.
 -        #[allow(clippy::needless_range_loop)]
 -        for row in 0..output_packed_len_floor {
@@ -2621,16 +2840,18 @@ index fef756f8..c04601e7 100644
              }
 -        }
 +        });
- 
+
          // Transpose the tail. If `tail_rows > 0` then necessarily we haven't entered the previous
          // loop.
 diff --git a/crates/stwo/src/prover/backend/simd/circle.rs b/crates/stwo/src/prover/backend/simd/circle.rs
-index 228c1cf6..4c61229b 100644
+index 228c1cf6..bce3806f 100644
 --- a/crates/stwo/src/prover/backend/simd/circle.rs
 +++ b/crates/stwo/src/prover/backend/simd/circle.rs
-@@ -23,12 +23,13 @@ use crate::core::poly::circle::{CanonicCoset, CircleDomain};
+@@ -22,13 +22,15 @@ use crate::core::fields::{Field, FieldExpOps, batch_inverse};
+ use crate::core::poly::circle::{CanonicCoset, CircleDomain};
  use crate::core::poly::utils::{domain_line_twiddles_from_tree, fold, get_folding_alphas};
  use crate::core::utils::{SliceExt, bit_reverse_index};
++use crate::parallel_iter;
  use crate::prover::backend::cpu::circle::slow_precompute_twiddles;
 -use crate::prover::backend::simd::column::BaseColumn;
 +use crate::prover::backend::simd::column::{BaseColumn, advise_pages};
@@ -2643,8 +2864,8 @@ index 228c1cf6..4c61229b 100644
  use crate::prover::poly::BitReversedOrder;
  use crate::prover::poly::circle::{CircleCoefficients, CircleEvaluation, PolyOps};
  use crate::prover::poly::twiddles::TwiddleTree;
-@@ -126,6 +127,260 @@ impl SimdBackend {
- 
+@@ -126,6 +128,268 @@ impl SimdBackend {
+
  // TODO(shahars): Everything is returned in redundant representation, where values can also be P.
  // Decide if and when it's ok and what to do if it's not.
 +/// [`PolyOps::interpolate`] for the SIMD backend, with the coefficients of large columns written to
@@ -2655,7 +2876,9 @@ index 228c1cf6..4c61229b 100644
 +    pool: Option<&BaseColumnPool<SimdBackend>>,
 +) -> CircleCoefficients<SimdBackend> {
 +    let _span = span!(Level::TRACE, "", class = "iFFT").entered();
++    eval.values.assert_valid_storage();
 +    let log_size = eval.values.length.ilog2();
++    assert_eq!(eval.values.len(), eval.domain.size());
 +    if log_size < MIN_FFT_LOG_SIZE {
 +        let cpu_poly = eval.to_cpu().interpolate();
 +        return CircleCoefficients::new(cpu_poly.coeffs.into_iter().collect());
@@ -2663,6 +2886,7 @@ index 228c1cf6..4c61229b 100644
 +
 +    let mut values = eval.values;
 +    let twiddles = domain_line_twiddles_from_tree(eval.domain, &twiddles.itwiddles);
++    super::fft::validate_twiddles(&twiddles, log_size as usize);
 +
 +    // TODO(alont): Cache this inversion.
 +    let inv = PackedBaseField::broadcast(BaseField::from(eval.domain.size()).inverse());
@@ -2680,10 +2904,15 @@ index 228c1cf6..4c61229b 100644
 +        _ => None,
 +    };
 +
-+    // Safe because [PackedBaseField] is aligned on 64 bytes.
++    // SAFETY: valid storage and the full twiddle shape were checked above. Owned
++    // Vecs provide aligned, disjoint buffers, and the FFT writes every output once.
++    // Rayon tasks own disjoint blocks; their scatter is a bijective (a,b,c)->(c,b,a)
++    // permutation, completed before the next pass reads the destination.
 +    unsafe {
 +        let ptr = transmute::<*mut PackedBaseField, *mut u32>(values.data.as_mut_ptr());
 +        if let Some((pool, mut coeffs)) = pooled {
++            coeffs.assert_valid_storage();
++            assert_eq!(coeffs.len(), values.len(), "pooled coefficient buffer size mismatch");
 +            ifft::ifft_out_of_place(
 +                ptr.cast_const(),
 +                transmute::<*mut PackedBaseField, *mut u32>(coeffs.data.as_mut_ptr()),
@@ -2904,7 +3133,7 @@ index 228c1cf6..4c61229b 100644
  impl PolyOps for SimdBackend {
      // The twiddles type is i32, and not BaseField. This is because the fast AVX mul implementation
      //  requires one of the numbers to be shifted left by 1 bit. This is not a reduced
-@@ -136,30 +391,15 @@ impl PolyOps for SimdBackend {
+@@ -136,30 +400,15 @@ impl PolyOps for SimdBackend {
          eval: CircleEvaluation<Self, BaseField, BitReversedOrder>,
          twiddles: &TwiddleTree<Self>,
      ) -> CircleCoefficients<Self> {
@@ -2932,7 +3161,7 @@ index 228c1cf6..4c61229b 100644
 -        values.data.iter_mut().for_each(|x| *x *= inv);
 +        interpolate_ex(eval, twiddles, None)
 +    }
- 
+
 -        CircleCoefficients::new(values)
 +    fn interpolate_pooled(
 +        eval: CircleEvaluation<Self, BaseField, BitReversedOrder>,
@@ -2941,12 +3170,12 @@ index 228c1cf6..4c61229b 100644
 +    ) -> CircleCoefficients<Self> {
 +        interpolate_ex(eval, twiddles, Some(pool))
      }
- 
+
      fn eval_at_point(
-@@ -229,6 +469,10 @@ impl PolyOps for SimdBackend {
+@@ -229,6 +478,10 @@ impl PolyOps for SimdBackend {
          (sum * twiddle_lows).pointwise_sum()
      }
- 
+
 +    fn barycentric_log_size(log_size: u32, log_blowup: u32) -> u32 {
 +        log_size.saturating_sub(log_blowup).max(LOG_N_LANES).min(log_size)
 +    }
@@ -2954,7 +3183,7 @@ index 228c1cf6..4c61229b 100644
      fn barycentric_weights_into(
          coset: CanonicCoset,
          p: CirclePoint<SecureField>,
-@@ -236,6 +480,9 @@ impl PolyOps for SimdBackend {
+@@ -236,6 +489,9 @@ impl PolyOps for SimdBackend {
      ) -> SecureColumnByCoords<SimdBackend> {
          let domain = coset.circle_domain();
          let log_size = domain.log_size();
@@ -2964,25 +3193,25 @@ index 228c1cf6..4c61229b 100644
          assert_eq!(buffer.len(), domain.size());
          let weights_vec_len = domain.size().div_ceil(N_LANES);
          if weights_vec_len == 1 {
-@@ -336,12 +583,12 @@ impl PolyOps for SimdBackend {
+@@ -336,12 +592,12 @@ impl PolyOps for SimdBackend {
          };
- 
+
          #[cfg(not(feature = "parallel"))]
 -        return (0..evals.domain.size().div_ceil(N_LANES))
 +        return (0..weights.len().div_ceil(N_LANES))
              .fold(PackedSecureField::zero(), |acc, i| acc + (weight_at(i) * evals.values.data[i]))
              .pointwise_sum();
- 
+
          #[cfg(feature = "parallel")]
 -        return (0..evals.domain.size().div_ceil(N_LANES))
 +        return (0..weights.len().div_ceil(N_LANES))
              .into_par_iter()
              .fold(PackedSecureField::zero, |acc: PackedSecureField, i: usize| {
                  acc + (weight_at(i) * evals.values.data[i])
-@@ -352,6 +599,88 @@ impl PolyOps for SimdBackend {
+@@ -352,6 +608,88 @@ impl PolyOps for SimdBackend {
              .sum::<SecureField>();
      }
- 
+
 +    fn barycentric_eval_group(
 +        evals: &[&CircleEvaluation<Self, BaseField, BitReversedOrder>],
 +        weights: &SecureColumnByCoords<Self>,
@@ -3068,10 +3297,10 @@ index 228c1cf6..4c61229b 100644
      fn eval_at_point_by_folding(
          evals: &CircleEvaluation<Self, BaseField, BitReversedOrder>,
          point: CirclePoint<SecureField>,
-@@ -413,31 +742,106 @@ impl PolyOps for SimdBackend {
+@@ -413,31 +751,106 @@ impl PolyOps for SimdBackend {
          // Evaluate on big domains by evaluating on several subdomains.
          let log_subdomains = log_size - fft_log_size;
- 
+
 -        for i in 0..(1 << log_subdomains) {
 -            // The subdomain twiddles are a slice of the large domain twiddles.
 -            let subdomain_twiddles = (0..(fft_log_size - 1))
@@ -3141,7 +3370,7 @@ index 228c1cf6..4c61229b 100644
 +        ];
 +        fft_subdomains_into(poly, dst, &stripe_twiddles);
 +    }
- 
+
 -            // FFT from the coefficients buffer directly into the provided buffer.
 -            unsafe {
 -                rfft::fft(
@@ -3181,7 +3410,7 @@ index 228c1cf6..4c61229b 100644
              }
          }
 +    }
- 
+
 -        CircleEvaluation::new(domain, buffer)
 +    fn subdomain_twiddles(coset: Coset) -> std::sync::Arc<TwiddleTree<Self>> {
 +        let key = (coset.initial_index.0, coset.log_size);
@@ -3192,12 +3421,12 @@ index 228c1cf6..4c61229b 100644
 +        SUBDOMAIN_TWIDDLES.lock().unwrap().insert(key, twiddles.clone());
 +        twiddles
      }
- 
+
      /// Precomputes the (doubled) twiddles for a given coset tower.
-@@ -534,6 +938,117 @@ impl PolyOps for SimdBackend {
+@@ -534,6 +947,120 @@ impl PolyOps for SimdBackend {
      }
  }
- 
+
 +/// Evaluates `poly` on `subdomain_twiddles.len()` subdomains of its size, the `i`-th written to
 +/// the `i`-th block of `dst`, which must hold all of them.
 +fn fft_subdomains_into(
@@ -3205,7 +3434,13 @@ index 228c1cf6..4c61229b 100644
 +    dst: &mut BaseColumn,
 +    subdomain_twiddles: &[Vec<&[u32]>],
 +) {
-+    assert!(dst.len() >= subdomain_twiddles.len() << poly.log_size());
++    poly.coeffs.assert_valid_storage();
++    dst.assert_valid_storage();
++    let required = subdomain_twiddles.len().checked_mul(1usize << poly.log_size()).unwrap();
++    assert!(dst.len() >= required);
++    // SAFETY: the owned Vecs provide aligned, disjoint storage of the checked sizes.
++    // Every destination word is written; each source word is initialized. The kernel
++    // checks each twiddle layer before its unchecked inner-loop reads.
 +    unsafe {
 +        rfft::fft_subdomains(
 +            transmute::<*const PackedBaseField, *const u32>(poly.coeffs.data.as_ptr()),
@@ -3271,15 +3506,14 @@ index 228c1cf6..4c61229b 100644
 +                    src[transposed_vec_index(v, log_n_vecs)]
 +                };
 +                let mut out = BaseColumn::zeros(1 << (level - 1));
-+                out.data
-+                    .par_iter_mut()
++                parallel_iter!(&mut out.data)
 +                    .enumerate()
 +                    .for_each(|(i, x)| *x = at(i) + at(i + half_vecs) * t);
 +                folded = Some(out);
 +            }
 +            Some(buf) => {
 +                let (lo, hi) = buf.data[..2 * half_vecs].split_at_mut(half_vecs);
-+                lo.par_iter_mut().zip(hi.par_iter()).for_each(|(l, h)| *l = *l + *h * t);
++                parallel_iter!(lo).zip(parallel_iter!(hi)).for_each(|(l, h)| *l = *l + *h * t);
 +                buf.data.truncate(half_vecs);
 +                buf.length = 1 << (level - 1);
 +            }
@@ -3291,9 +3525,7 @@ index 228c1cf6..4c61229b 100644
 +        let natural = folded;
 +        let log_n_vecs = log_block - LOG_N_LANES;
 +        folded = BaseColumn::zeros(1 << log_block);
-+        folded
-+            .data
-+            .par_iter_mut()
++        parallel_iter!(&mut folded.data)
 +            .enumerate()
 +            .for_each(|(i, x)| *x = natural.data[transposed_vec_index(i, log_n_vecs)]);
 +    }
@@ -3311,11 +3543,11 @@ index 228c1cf6..4c61229b 100644
 +
  fn compute_small_coset_twiddles(coset: Coset) -> TwiddleTree<SimdBackend> {
      let twiddles = slow_precompute_twiddles(coset);
- 
-@@ -601,6 +1116,273 @@ fn slow_eval_at_point(
+
+@@ -601,6 +1128,273 @@ fn slow_eval_at_point(
      fold(poly.coeffs.as_slice(), &mappings)
  }
- 
+
 +/// [`PolyOps::evaluate_from_prefix`] for the SIMD backend. Folding a column's evaluation on its
 +/// first subdomain with a point's factors (y, x, pi(x), ...) evaluates it at that point
 +/// (`CpuBackend::eval_at_point_by_folding`). The 32 points of an aligned block of a stripe share
@@ -3586,25 +3818,261 @@ index 228c1cf6..4c61229b 100644
  #[cfg(test)]
  mod tests {
      use itertools::Itertools;
+@@ -885,3 +1679,235 @@ mod tests {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod safety_review_tests {
++    use super::*;
++
++    fn values(log_size: u32, pattern: usize) -> Vec<BaseField> {
++        let mut seed = 0x9e3779b97f4a7c15u64;
++        (0..1usize << log_size)
++            .map(|i| {
++                seed ^= seed << 13;
++                seed ^= seed >> 7;
++                seed ^= seed << 17;
++                match pattern {
++                    0 => BaseField::from((seed % crate::core::fields::m31::P as u64) as u32),
++                    1 => BaseField::from(crate::core::fields::m31::P - 1 - (i as u32 % 17)),
++                    _ => BaseField::from((i == 0) as u32),
++                }
++            })
++            .collect()
++    }
++
++    fn fft_matrix() {
++        for n in [5, 16, 17, 18] {
++            let domain = CanonicCoset::new(n).circle_domain();
++            let extended = CanonicCoset::new(n + 1).circle_domain();
++            let twiddles = SimdBackend::precompute_twiddles(extended.half_coset);
++            for pattern in 0..3 {
++                let input = values(n, pattern);
++                let cpu = CircleEvaluation::<CpuBackend, BaseField, BitReversedOrder>::new(
++                    domain,
++                    input.clone(),
++                )
++                .interpolate();
++                let eval = CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(
++                    domain,
++                    BaseColumn::from_cpu(&input),
++                );
++                let regular = eval.clone().interpolate_with_twiddles(&twiddles);
++                let pool = BaseColumnPool::new();
++                // Exercise out-of-place inverse FFT with a reused, nonzero buffer.
++                pool.give_back(n, BaseColumn::from_cpu(&vec![BaseField::from(123); 1 << n]));
++                let pooled = SimdBackend::interpolate_pooled(eval, &twiddles, &pool);
++                assert_eq!(
++                    regular.coeffs.to_cpu(),
++                    pooled.coeffs.to_cpu(),
++                    "pooled n={n}, pattern={pattern}"
++                );
++                let expected = cpu.evaluate(extended).values;
++                assert_eq!(
++                    pooled.evaluate_with_twiddles(extended, &twiddles).values.to_cpu(),
++                    expected,
++                    "CPU n={n}, pattern={pattern}"
++                );
++                // Preserve every SIMD word just outside the raw kernel's destination.
++                let refs = domain_line_twiddles_from_tree(extended, &twiddles.twiddles);
++                let subdomains: Vec<_> = (0..2)
++                    .map(|i| {
++                        (0..n - 1)
++                            .map(|layer| {
++                                &refs[layer as usize]
++                                    [i << (n - 2 - layer)..(i + 1) << (n - 2 - layer)]
++                            })
++                            .collect::<Vec<_>>()
++                    })
++                    .collect();
++                let sentinel = PackedBaseField::broadcast(BaseField::from(987));
++                let mut dst = BaseColumn::zeros(extended.size() + 2 * N_LANES);
++                dst.data.fill(sentinel);
++                // SAFETY: both arrays are aligned, initialized and disjoint. The middle
++                // range has exactly two complete subdomains, guarded by a vector at each end.
++                unsafe {
++                    rfft::fft_subdomains(
++                        pooled.coeffs.data.as_ptr().cast(),
++                        dst.data.as_mut_ptr().add(1).cast(),
++                        &subdomains,
++                        n as usize,
++                    )
++                };
++                assert_eq!(dst.data[0].to_array(), sentinel.to_array());
++                assert_eq!(dst.data.last().unwrap().to_array(), sentinel.to_array());
++                for (actual, expected) in
++                    dst.to_cpu()[N_LANES..N_LANES + extended.size()].iter().zip(&expected)
++                {
++                    assert_eq!(actual, expected);
++                }
++                // Block folding must respect the large-coefficient transpose on both sides
++                // of the cache threshold, including the first and last destination blocks.
++                for log_block in [5, 16, 17].into_iter().filter(|&b| b <= n) {
++                    for block in [0, 1, (1usize << (n + 1 - log_block)) - 1] {
++                        let mut out = BaseColumn::zeros(1 << log_block);
++                        evaluate_block_into(
++                            &pooled, extended, &twiddles, log_block, block, &mut out,
++                        );
++                        assert_eq!(
++                            out.to_cpu(),
++                            expected[block << log_block..(block + 1) << log_block],
++                            "block n={n}, log_block={log_block}, block={block}"
++                        );
++                    }
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn fft_cpu_matrix_and_destination_canaries() {
++        fft_matrix();
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn fft_cpu_matrix_on_one_and_four_workers() {
++        for threads in [1, 4] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build()
++                .unwrap()
++                .install(fft_matrix);
++        }
++    }
++
++    #[test]
++    fn prefix_reconstruction_matches_full_fft() {
++        for n in [10, 11, 16, 17] {
++            let domain = CanonicCoset::new(n + 2).circle_domain();
++            let twiddles = SimdBackend::precompute_twiddles(domain.half_coset);
++            let poly = CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(
++                CanonicCoset::new(n).circle_domain(),
++                BaseColumn::from_cpu(&values(n, 0)),
++            )
++            .interpolate();
++            let full = poly.evaluate_with_twiddles(domain, &twiddles).values;
++            let prefix = BaseColumn::from_cpu(&full.to_cpu()[..1 << n]);
++            let targets: Vec<_> = [0, 1, 3]
++                .into_iter()
++                .map(|stripe| (stripe, vec![0, 1, 15, 16, 31, 32, (1 << n) - 2, (1 << n) - 1]))
++                .chain([(2, vec![])])
++                .collect();
++            let expected: Vec<Vec<_>> = targets
++                .iter()
++                .map(|(stripe, rows)| rows.iter().map(|row| full.at((stripe << n) + row)).collect())
++                .collect();
++            for bary in [false, true] {
++                let mut scratch = BaseColumn::zeros(1 << n);
++                assert_eq!(
++                    evaluate_from_prefix_mode(&prefix, n, domain, &targets, &mut scratch, bary)
++                        .unwrap(),
++                    expected
++                );
++            }
++            clear_stripe_caches();
++        }
++    }
++
++    #[test]
++    #[should_panic(expected = "invalid SIMD column storage")]
++    fn malformed_fft_destination_is_rejected() {
++        let poly = CircleCoefficients::<SimdBackend>::new(BaseColumn::zeros(32));
++        let domain = CanonicCoset::new(6).circle_domain();
++        let twiddles = SimdBackend::precompute_twiddles(domain.half_coset);
++        let dst = BaseColumn { data: vec![], length: 64 };
++        SimdBackend::evaluate_into(&poly, domain, &twiddles, dst);
++    }
++
++    #[test]
++    #[should_panic(expected = "invalid SIMD column storage")]
++    fn malformed_interpolation_storage_is_rejected() {
++        let domain = CanonicCoset::new(17).circle_domain();
++        let eval = CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(
++            domain,
++            BaseColumn { data: vec![], length: domain.size() },
++        );
++        eval.interpolate();
++    }
++
++    #[test]
++    #[should_panic(expected = "invalid SIMD column storage")]
++    fn malformed_pooled_storage_is_rejected() {
++        let domain = CanonicCoset::new(17).circle_domain();
++        let twiddles = SimdBackend::precompute_twiddles(domain.half_coset);
++        let pool = BaseColumnPool::new();
++        pool.give_back(17, BaseColumn { data: vec![], length: domain.size() });
++        let eval = CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(
++            domain,
++            BaseColumn::zeros(domain.size()),
++        );
++        SimdBackend::interpolate_pooled(eval, &twiddles, &pool);
++    }
++
++    #[test]
++    #[should_panic(expected = "invalid FFT twiddle layer size")]
++    fn truncated_forward_twiddles_are_rejected() {
++        let domain = CanonicCoset::new(17).circle_domain();
++        let twiddles = SimdBackend::precompute_twiddles(domain.half_coset);
++        let mut refs = domain_line_twiddles_from_tree(domain, &twiddles.twiddles);
++        refs[1] = &[];
++        let src = BaseColumn::zeros(domain.size());
++        let mut dst = BaseColumn::zeros(domain.size());
++        // SAFETY: aligned, initialized, disjoint arrays of the stated size. The
++        // malformed twiddle metadata must be rejected before unchecked reads.
++        unsafe {
++            rfft::fft_subdomains(
++                src.data.as_ptr().cast(),
++                dst.data.as_mut_ptr().cast(),
++                &[refs],
++                17,
++            )
++        };
++    }
++
++    #[test]
++    #[should_panic(expected = "invalid FFT twiddle layer size")]
++    fn truncated_inverse_twiddles_are_rejected() {
++        let domain = CanonicCoset::new(17).circle_domain();
++        let twiddles = SimdBackend::precompute_twiddles(domain.half_coset);
++        let mut refs = domain_line_twiddles_from_tree(domain, &twiddles.itwiddles);
++        refs[1] = &[];
++        let src = BaseColumn::zeros(domain.size());
++        let mut dst = BaseColumn::zeros(domain.size());
++        // SAFETY: valid, initialized, aligned and disjoint arrays; malformed twiddle
++        // metadata must be rejected before any unchecked access or output store.
++        unsafe {
++            ifft::ifft_out_of_place(
++                src.data.as_ptr().cast(),
++                dst.data.as_mut_ptr().cast(),
++                &refs,
++                17,
++                PackedBaseField::one(),
++            )
++        };
++    }
++}
 diff --git a/crates/stwo/src/prover/backend/simd/cm31.rs b/crates/stwo/src/prover/backend/simd/cm31.rs
 index b7f80955..b276c610 100644
 --- a/crates/stwo/src/prover/backend/simd/cm31.rs
 +++ b/crates/stwo/src/prover/backend/simd/cm31.rs
 @@ -21,16 +21,19 @@ unsafe impl Sync for PackedCM31 {}
- 
+
  impl PackedCM31 {
      /// Constructs a new instance with all vector elements set to `value`.
 +    #[inline(always)]
      pub const fn broadcast(value: CM31) -> Self {
          Self([PackedM31::broadcast(value.0), PackedM31::broadcast(value.1)])
      }
- 
+
      /// Returns all `a` values such that each vector element is represented as `a + bi`.
 +    #[inline(always)]
      pub const fn a(&self) -> PackedM31 {
          self.0[0]
      }
- 
+
      /// Returns all `b` values such that each vector element is represented as `a + bi`.
 +    #[inline(always)]
      pub const fn b(&self) -> PackedM31 {
@@ -3612,7 +4080,7 @@ index b7f80955..b276c610 100644
      }
 @@ -67,6 +70,7 @@ impl PackedCM31 {
      }
- 
+
      /// Doubles each element in the vector.
 +    #[inline(always)]
      pub fn double(self) -> Self {
@@ -3621,7 +4089,7 @@ index b7f80955..b276c610 100644
 @@ -76,6 +80,7 @@ impl PackedCM31 {
  impl Add for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn add(self, rhs: Self) -> Self::Output {
          Self([self.a() + rhs.a(), self.b() + rhs.b()])
@@ -3629,13 +4097,13 @@ index b7f80955..b276c610 100644
 @@ -84,26 +89,56 @@ impl Add for PackedCM31 {
  impl Sub for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn sub(self, rhs: Self) -> Self::Output {
          Self([self.a() - rhs.a(), self.b() - rhs.b()])
      }
  }
- 
+
 -impl Mul for PackedCM31 {
 -    type Output = Self;
 -
@@ -3684,7 +4152,7 @@ index b7f80955..b276c610 100644
 +pub(crate) fn mul_cm31_m31(a: PackedCM31, b: PackedM31) -> PackedCM31 {
 +    a.mul_m31_inline(b)
  }
- 
+
  impl Zero for PackedCM31 {
 +    #[inline(always)]
      fn zero() -> Self {
@@ -3692,21 +4160,21 @@ index b7f80955..b276c610 100644
      }
 @@ -122,18 +157,21 @@ unsafe impl Zeroable for PackedCM31 {
  }
- 
+
  impl One for PackedCM31 {
 +    #[inline(always)]
      fn one() -> Self {
          Self([PackedM31::one(), PackedM31::zero()])
      }
  }
- 
+
  impl MulAssign for PackedCM31 {
 +    #[inline(always)]
      fn mul_assign(&mut self, rhs: Self) {
          *self = *self * rhs;
      }
  }
- 
+
  impl FieldExpOps for PackedCM31 {
 +    #[inline(always)]
      fn square(&self) -> Self {
@@ -3715,7 +4183,7 @@ index b7f80955..b276c610 100644
 @@ -201,6 +239,7 @@ fn batch_inverse_chunk(
  impl Add<PackedM31> for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn add(self, rhs: PackedM31) -> Self::Output {
          Self([self.a() + rhs, self.b()])
@@ -3723,7 +4191,7 @@ index b7f80955..b276c610 100644
 @@ -209,6 +248,7 @@ impl Add<PackedM31> for PackedCM31 {
  impl Sub<PackedM31> for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn sub(self, rhs: PackedM31) -> Self::Output {
          let Self([a, b]) = self;
@@ -3731,7 +4199,7 @@ index b7f80955..b276c610 100644
 @@ -218,15 +258,16 @@ impl Sub<PackedM31> for PackedCM31 {
  impl Mul<PackedM31> for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn mul(self, rhs: PackedM31) -> Self::Output {
 -        let Self([a, b]) = self;
@@ -3739,26 +4207,26 @@ index b7f80955..b276c610 100644
 +        mul_cm31_m31(self, rhs)
      }
  }
- 
+
  impl Neg for PackedCM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn neg(self) -> Self::Output {
          let Self([a, b]) = self;
          Self([-a, -b])
 diff --git a/crates/stwo/src/prover/backend/simd/column.rs b/crates/stwo/src/prover/backend/simd/column.rs
-index c421a104..af0bdd20 100644
+index c421a104..1b8e6701 100644
 --- a/crates/stwo/src/prover/backend/simd/column.rs
 +++ b/crates/stwo/src/prover/backend/simd/column.rs
-@@ -1,4 +1,6 @@
-+use std::alloc::{GlobalAlloc, Layout, System};
+@@ -1,5 +1,5 @@
++use std::array;
  use std::iter::zip;
-+use std::sync::atomic::{AtomicUsize, Ordering};
- use std::{array, mem};
- 
+-use std::{array, mem};
+
  use bytemuck::allocation::cast_vec;
-@@ -16,11 +18,96 @@ use super::very_packed_m31::{
+ use bytemuck::{Zeroable, cast_slice, cast_slice_mut};
+@@ -16,11 +16,87 @@ use super::very_packed_m31::{
      N_VERY_PACKED_ELEMS, VeryPackedBaseField, VeryPackedQM31, VeryPackedSecureField,
  };
  use crate::core::fields::cm31::CM31;
@@ -3767,7 +4235,7 @@ index c421a104..af0bdd20 100644
  use crate::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
  use crate::prover::backend::{Column, CpuBackend};
  use crate::prover::secure_column::SecureColumnByCoords;
- 
+
 +#[cfg(unix)]
 +unsafe extern "C" {
 +    #[cfg(target_os = "linux")]
@@ -3776,15 +4244,6 @@ index c421a104..af0bdd20 100644
 +        length: usize,
 +        advice: core::ffi::c_int,
 +    ) -> core::ffi::c_int;
-+    fn mmap(
-+        addr: *mut core::ffi::c_void,
-+        length: usize,
-+        prot: core::ffi::c_int,
-+        flags: core::ffi::c_int,
-+        fd: core::ffi::c_int,
-+        offset: i64,
-+    ) -> *mut core::ffi::c_void;
-+    fn munmap(addr: *mut core::ffi::c_void, length: usize) -> core::ffi::c_int;
 +    /// glibc: hands the free pages of every malloc arena back to the kernel; thread-safe.
 +    #[cfg(all(target_os = "linux", target_env = "gnu"))]
 +    safe fn malloc_trim(pad: usize) -> core::ffi::c_int;
@@ -3818,7 +4277,7 @@ index c421a104..af0bdd20 100644
 +/// nothing the program reads before writing it again) need not stay resident: `MADV_DONTNEED`
 +/// on the whole pages it covers, which frees them now and maps zero pages back on the next
 +/// touch. A hint with the same scope as [`advise_pages`].
-+pub(crate) fn release_pages<T>(spare: &[std::mem::MaybeUninit<T>]) {
++pub(crate) fn release_pages<T>(spare: &mut [std::mem::MaybeUninit<T>]) {
 +    const MADV_DONTNEED: core::ffi::c_int = 4;
 +    let (start, len) = whole_pages(spare.as_ptr() as usize, std::mem::size_of_val(spare));
 +    advise_range(start, len, MADV_DONTNEED);
@@ -3856,10 +4315,46 @@ index c421a104..af0bdd20 100644
  /// An efficient structure for storing and operating on a arbitrary number of [`BaseField`] values.
  #[derive(Clone, Debug)]
  pub struct BaseColumn {
-@@ -74,12 +161,10 @@ impl BaseColumn {
+@@ -30,6 +106,17 @@ pub struct BaseColumn {
+ }
+
+ impl BaseColumn {
++    /// Checks the public logical length against its physical SIMD storage.
++    pub(crate) fn assert_valid_storage(&self) {
++        assert_eq!(self.data.len(), self.length.div_ceil(N_LANES), "invalid SIMD column storage");
++    }
++
++    /// Groups adjacent SIMD words using a checked slice cast with the correct byte extent.
++    pub fn as_very_packed_slice(&self) -> &[VeryPackedBaseField] {
++        self.assert_valid_storage();
++        cast_slice(&self.data)
++    }
++
+     /// Extracts a slice containing the entire vector of [`BaseField`]s.
+     pub fn as_slice(&self) -> &[BaseField] {
+         &cast_slice(&self.data)[..self.length]
+@@ -40,13 +127,10 @@ impl BaseColumn {
+         &mut cast_slice_mut(&mut self.data)[..self.length]
+     }
+
+-    pub fn into_cpu_vec(mut self) -> Vec<BaseField> {
+-        let capacity = self.data.capacity() * N_LANES;
+-        let length = self.length;
+-        let ptr = self.data.as_mut_ptr() as *mut BaseField;
+-        let res = unsafe { Vec::from_raw_parts(ptr, length, capacity) };
+-        mem::forget(self);
+-        res
++    pub fn into_cpu_vec(self) -> Vec<BaseField> {
++        // Packed SIMD allocations have stronger alignment than scalar allocations. A
++        // scalar Vec must not take ownership and later deallocate them with a new layout.
++        self.to_cpu()
+     }
+
+     pub fn from_cpu(values: &[BaseField]) -> Self {
+@@ -74,32 +158,39 @@ impl BaseColumn {
      }
  }
- 
+
 -unsafe impl Send for BaseColumn {}
 -unsafe impl Sync for BaseColumn {}
 -
@@ -3869,19 +4364,21 @@ index c421a104..af0bdd20 100644
 +        advise_pages(&data, false);
          Self { data, length }
      }
- 
-@@ -87,6 +172,7 @@ impl Column<BaseField> for BaseColumn {
+
+-    #[allow(clippy::uninit_vec)]
      unsafe fn uninitialized(length: usize) -> Self {
-         let mut data = Vec::with_capacity(length.div_ceil(N_LANES));
-         data.set_len(length.div_ceil(N_LANES));
-+        advise_pages(&data, false);
-         Self { data, length }
+-        let mut data = Vec::with_capacity(length.div_ceil(N_LANES));
+-        data.set_len(length.div_ceil(N_LANES));
+-        Self { data, length }
++        // Keep typed SIMD storage initialized, including packed padding. This also makes
++        // unwinding, borrowing its slices, and passing it to the memory pool valid.
++        Self::zeros(length)
      }
- 
-@@ -94,12 +180,22 @@ impl Column<BaseField> for BaseColumn {
+
+     fn to_cpu(&self) -> Vec<BaseField> {
          self.as_slice().to_vec()
      }
- 
+
 +    fn from_fill(len: usize, fill: &dyn Fn(&mut [BaseField])) -> Self {
 +        let mut column = Self::zeros(len);
 +        fill(column.as_mut_slice());
@@ -3891,7 +4388,7 @@ index c421a104..af0bdd20 100644
      fn len(&self) -> usize {
          self.length
      }
- 
+
 +    #[inline]
      fn at(&self, index: usize) -> BaseField {
 -        self.data[index / N_LANES].to_array()[index % N_LANES]
@@ -3900,9 +4397,9 @@ index c421a104..af0bdd20 100644
 +        let x = self.data[index / N_LANES].into_simd()[index % N_LANES];
 +        BaseField::from_u32_unchecked(x.min(x.wrapping_sub(P)))
      }
- 
+
      fn set(&mut self, index: usize, value: BaseField) {
-@@ -115,6 +211,60 @@ impl Column<BaseField> for BaseColumn {
+@@ -115,6 +206,35 @@ impl Column<BaseField> for BaseColumn {
              Self { data: second, length: self.length - self.length / 2 },
          )
      }
@@ -3916,74 +4413,49 @@ index c421a104..af0bdd20 100644
 +        true
 +    }
 +
-+    #[allow(clippy::uninit_vec)]
 +    fn grow(&mut self, len: usize) -> bool {
 +        let n_vecs = len.div_ceil(N_LANES);
 +        if len < self.length || n_vecs > self.data.capacity() {
 +            return false;
 +        }
-+        // The new elements are left uninitialized, as by `uninitialized`: the caller writes them
-+        // before reading them.
-+        unsafe { self.data.set_len(n_vecs) };
++        // A safe API must leave every newly exposed SIMD lane initialized. `resize` also
++        // handles regrowth after spare pages were released, without reading their old bytes.
++        let old_len = self.length;
++        let old_packed_end = self.data.len() * N_LANES;
++        self.data.resize(n_vecs, PackedBaseField::zeroed());
 +        self.length = len;
++        // A truncate/grow pair may also expose lanes in the retained partial vector.
++        self.as_mut_slice()[old_len..len.min(old_packed_end)].fill(BaseField::zero());
 +        true
 +    }
 +
 +    fn release_spare(&mut self) {
 +        release_pages(self.data.spare_capacity_mut());
 +    }
-+
-+    fn release_zeroed_pages(&mut self) {
-+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+        {
-+            // Membership proves the exact allocation base is a live private anonymous mapping
-+            // from LargeBlockCache. A size or alignment test alone cannot establish that fact.
-+            let allocation_base = self.data.as_mut_ptr() as usize;
-+            if self.length < (1 << 21) / mem::size_of::<BaseField>()
-+                || !LIVE_ANONYMOUS_BLOCKS.contains(allocation_base)
-+            {
-+                return;
-+            }
-+            // Inspect only initialized logical words, not spare capacity or packed padding.
-+            // P is another field encoding of zero but is not the literal bytes restored by
-+            // MADV_DONTNEED, so it must not satisfy this check.
-+            let initialized_bytes = {
-+                let initialized = self.as_slice();
-+                if !initialized.iter().all(|value| value.0 == 0) {
-+                    return;
-+                }
-+                mem::size_of_val(initialized)
-+            };
-+            let (start, len) = whole_pages(allocation_base, initialized_bytes);
-+            // Exclusive ownership keeps the allocation live throughout membership, scanning,
-+            // and advice. Inward rounding excludes every byte outside the initialized slice.
-+            advise_range(start, len, 4);
-+        }
-+    }
  }
- 
+
  impl FromIterator<BaseField> for BaseColumn {
-@@ -145,9 +295,6 @@ pub struct CM31Column {
+@@ -145,9 +265,6 @@ pub struct CM31Column {
      pub length: usize,
  }
- 
+
 -unsafe impl Send for CM31Column {}
 -unsafe impl Sync for CM31Column {}
 -
  impl Column<CM31> for CM31Column {
      fn zeros(length: usize) -> Self {
          Self { data: vec![PackedCM31::zeroed(); length.div_ceil(N_LANES)], length }
-@@ -265,9 +412,6 @@ impl SecureColumn {
+@@ -265,9 +382,6 @@ impl SecureColumn {
      }
  }
- 
+
 -unsafe impl Send for SecureColumn {}
 -unsafe impl Sync for SecureColumn {}
 -
  impl Column<SecureField> for SecureColumn {
      fn zeros(length: usize) -> Self {
          Self { data: vec![PackedSecureField::zeroed(); length.div_ceil(N_LANES)], length }
-@@ -422,6 +566,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
+@@ -422,6 +536,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
      /// # Safety
      ///
      /// `vec_index` must be a valid index.
@@ -3991,7 +4463,7 @@ index c421a104..af0bdd20 100644
      pub unsafe fn packed_at(&self, vec_index: usize) -> VeryPackedSecureField {
          VeryPackedQM31::from_very_packed_m31s(std::array::from_fn(|i| {
              *self.0[i].0.get_unchecked(vec_index)
-@@ -431,6 +576,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
+@@ -431,6 +546,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
      /// # Safety
      ///
      /// `vec_index` must be a valid index.
@@ -3999,256 +4471,177 @@ index c421a104..af0bdd20 100644
      pub unsafe fn set_packed(&mut self, vec_index: usize, value: VeryPackedSecureField) {
          let [a, b, c, d] = value.into_very_packed_m31s();
          *self.0[0].0.get_unchecked_mut(vec_index) = a;
-@@ -751,6 +897,239 @@ impl VeryPackedSecureColumnByCoords {
+@@ -537,6 +653,60 @@ impl SecureColumnByCoords<SimdBackend> {
+             })
+     }
+
++    /// Groups initialized packed storage through checked slices, retaining the actual length.
++    pub fn very_packed_chunks_mut(
++        &mut self,
++        chunk_size: usize,
++    ) -> impl ExactSizeIterator<Item = VeryPackedSecureColumnByCoordsMutSlice<'_>> {
++        assert!(self.columns.iter().all(|c| c.len() == self.len()));
++        let [a, b, c, d] = &mut self.columns;
++        // Use a function so each returned slice keeps the lifetime of its own column.
++        fn grouped(column: &mut BaseColumn) -> &mut [VeryPackedBaseField] {
++            column.assert_valid_storage();
++            cast_slice_mut(&mut column.data)
++        }
++        izip!(
++            grouped(a).chunks_mut(chunk_size),
++            grouped(b).chunks_mut(chunk_size),
++            grouped(c).chunks_mut(chunk_size),
++            grouped(d).chunks_mut(chunk_size)
++        )
++        .map(|(a, b, c, d)| {
++            VeryPackedSecureColumnByCoordsMutSlice([
++                VeryPackedBaseColumnMutSlice(a),
++                VeryPackedBaseColumnMutSlice(b),
++                VeryPackedBaseColumnMutSlice(c),
++                VeryPackedBaseColumnMutSlice(d),
++            ])
++        })
++    }
++
++    #[cfg(feature = "parallel")]
++    pub fn par_very_packed_chunks_mut(
++        &mut self,
++        chunk_size: usize,
++    ) -> impl IndexedParallelIterator<Item = VeryPackedSecureColumnByCoordsMutSlice<'_>> {
++        assert!(self.columns.iter().all(|c| c.len() == self.len()));
++        let [a, b, c, d] = &mut self.columns;
++        fn grouped(column: &mut BaseColumn) -> &mut [VeryPackedBaseField] {
++            column.assert_valid_storage();
++            cast_slice_mut(&mut column.data)
++        }
++        grouped(a)
++            .par_chunks_mut(chunk_size)
++            .zip(grouped(b).par_chunks_mut(chunk_size))
++            .zip(grouped(c).par_chunks_mut(chunk_size))
++            .zip(grouped(d).par_chunks_mut(chunk_size))
++            .map(|(((a, b), c), d)| {
++                VeryPackedSecureColumnByCoordsMutSlice([
++                    VeryPackedBaseColumnMutSlice(a),
++                    VeryPackedBaseColumnMutSlice(b),
++                    VeryPackedBaseColumnMutSlice(c),
++                    VeryPackedBaseColumnMutSlice(d),
++                ])
++            })
++    }
++
+     pub fn from_cpu(cpu: SecureColumnByCoords<CpuBackend>) -> Self {
+         Self { columns: cpu.columns.map(|col| BaseColumn::from_cpu(&col)) }
+     }
+@@ -558,14 +728,6 @@ pub struct VeryPackedBaseColumn {
+ }
+
+ impl VeryPackedBaseColumn {
+-    /// Transforms a `&BaseColumn` to a `&VeryPackedBaseColumn`.
+-    /// # Safety
+-    ///
+-    /// The resulting pointer does not update the underlying `data`'s length.
+-    pub const unsafe fn transform_under_ref(value: &BaseColumn) -> &Self {
+-        &*(std::ptr::addr_of!(*value) as *const VeryPackedBaseColumn)
+-    }
+-
+     pub fn chunks_mut(
+         &mut self,
+         chunk_size: usize,
+@@ -710,16 +872,6 @@ impl VeryPackedSecureColumnByCoords {
+         .collect()
+     }
+
+-    /// Transforms a `&mut SecureColumnByCoords<SimdBackend>` to a
+-    /// `&mut VeryPackedSecureColumnByCoords`.
+-    ///
+-    /// # Safety
+-    ///
+-    /// The resulting pointer does not update the underlying columns' `data`'s lengths.
+-    pub unsafe fn transform_under_mut(value: &mut SecureColumnByCoords<SimdBackend>) -> &mut Self {
+-        &mut *(std::ptr::addr_of!(*value) as *mut VeryPackedSecureColumnByCoords)
+-    }
+-
+     pub fn chunks_mut(
+         &mut self,
+         chunk_size: usize,
+@@ -877,3 +1029,67 @@ mod tests {
+         assert_eq!(rhs.to_cpu(), values[values.len() / 2..]);
      }
  }
- 
-+/// A global allocator that keeps large blocks in a cache every thread shares.
-+///
-+/// glibc serves each thread from its own arena. A large temporary that one rayon worker frees (an
-+/// interaction writer's denominators, a FRI layer, a quotient accumulator, a Merkle layer) stays in
-+/// that worker's arena, where the other workers cannot reuse it, so across 16 workers the freed
-+/// blocks pile up as holes: about 1.4 GB at the privacy proof's peak. Handing them back to the
-+/// kernel instead (a lower mmap threshold, one arena, `malloc_trim`) frees that memory but costs
-+/// 3.5% to 16% of the run in system calls and page faults.
-+///
-+/// Blocks of 1 MiB and up are mapped here instead, rounded up to a quarter of a power of two, which
-+/// is exact for the power-of-two sizes of most columns and layers. A freed block waits in its class
-+/// for the next request of that class, from any thread, which takes it without a system call. Idle
-+/// blocks stay bounded: past [`LARGE_IDLE_CAP`] a freed block is unmapped, and a request that finds
-+/// its class empty first unmaps idle blocks of other classes, down to [`LARGE_LOW_WATER`], so that
-+/// a new phase's blocks replace the idle ones instead of adding to them. Smaller blocks, and blocks
-+/// aligned past a page, go to the system allocator as before. Proof bytes do not depend on where
-+/// buffers come from.
-+#[cfg(unix)]
-+pub struct LargeBlockCache;
 +
-+const LARGE_MIN_LOG: u32 = 20;
-+const LARGE_MAX_LOG: u32 = 40;
-+const LARGE_CLASSES: usize = ((LARGE_MAX_LOG - LARGE_MIN_LOG) * 4) as usize + 1;
-+/// Idle blocks a class can hold.
-+const LARGE_SLOTS: usize = 128;
-+/// The most idle memory the cache holds.
-+const LARGE_IDLE_CAP: usize = 0;
-+/// Idle memory a request with an empty class leaves alone: enough to absorb the churn between
-+/// classes within a phase without a system call.
-+const LARGE_LOW_WATER: usize = 0;
-+/// Blocks of 2 MiB and up start on a 2 MiB boundary, so transparent huge pages can back all of
-+/// them.
-+const HUGE_PAGE: usize = 1 << 21;
-+const PROT_READ: core::ffi::c_int = 1;
-+const PROT_WRITE: core::ffi::c_int = 2;
-+const MAP_PRIVATE: core::ffi::c_int = 2;
-+#[cfg(target_os = "linux")]
-+const MAP_ANONYMOUS: core::ffi::c_int = 0x20;
-+#[cfg(not(target_os = "linux"))]
-+const MAP_ANONYMOUS: core::ffi::c_int = 0x1000;
++#[cfg(test)]
++mod safety_review_tests {
++    use super::*;
 +
-+/// The idle blocks, as addresses in per-class slots, and their total size.
-+struct LargeBlocks {
-+    idle: AtomicUsize,
-+    counts: [AtomicUsize; LARGE_CLASSES],
-+    slots: [[AtomicUsize; LARGE_SLOTS]; LARGE_CLASSES],
-+}
-+
-+static LARGE_BLOCKS: LargeBlocks = LargeBlocks {
-+    idle: AtomicUsize::new(0),
-+    counts: [const { AtomicUsize::new(0) }; LARGE_CLASSES],
-+    slots: [const { [const { AtomicUsize::new(0) }; LARGE_SLOTS] }; LARGE_CLASSES],
-+};
-+
-+/// A conservative, allocation-free record of currently live private anonymous allocation bases.
-+/// Collisions lose optimization opportunities; they never replace a different live address.
-+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+struct LiveAnonymousBlocks {
-+    slots: [AtomicUsize; 1 << 14],
-+}
-+
-+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+static LIVE_ANONYMOUS_BLOCKS: LiveAnonymousBlocks =
-+    LiveAnonymousBlocks { slots: [const { AtomicUsize::new(0) }; 1 << 14] };
-+
-+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+impl LiveAnonymousBlocks {
-+    fn slot(&self, address: usize) -> &AtomicUsize {
-+        &self.slots[((address >> 21) ^ (address >> 35)) & (self.slots.len() - 1)]
++    #[test]
++    fn safe_grow_initializes_new_packed_values() {
++        let mut column = BaseColumn::from_cpu(&vec![BaseField::from(7); 64]);
++        assert!(column.truncate(16));
++        assert!(column.grow(64));
++        assert_eq!(column.to_cpu()[..16], [BaseField::from(7); 16]);
++        assert_eq!(column.to_cpu()[16..], [BaseField::zero(); 48]);
++        assert!(!column.grow(128));
++        assert_eq!(column.len(), 64);
++        let mut fresh = BaseColumn::zeros(16);
++        fresh.data.reserve_exact(1);
++        assert!(fresh.grow(32));
++        assert_eq!(fresh.to_cpu(), vec![BaseField::zero(); 32]);
++        let mut partial = BaseColumn::from_cpu(&vec![BaseField::from(7); 64]);
++        assert!(partial.truncate(17));
++        assert!(partial.grow(31));
++        assert_eq!(partial.to_cpu()[17..], [BaseField::zero(); 14]);
 +    }
 +
-+    fn register(&self, address: usize) {
-+        if address != 0 {
-+            let _ =
-+                self.slot(address).compare_exchange(0, address, Ordering::SeqCst, Ordering::SeqCst);
++    #[test]
++    fn scalar_conversion_preserves_values_and_allocation_layout() {
++        for length in [0, 1, 16, 17, 128] {
++            let expected: Vec<_> = (0..length).map(BaseField::from).collect();
++            assert_eq!(BaseColumn::from_cpu(&expected).into_cpu_vec(), expected);
 +        }
 +    }
 +
-+    fn unregister(&self, address: usize) {
-+        if address != 0 {
-+            let _ =
-+                self.slot(address).compare_exchange(address, 0, Ordering::SeqCst, Ordering::SeqCst);
-+        }
-+    }
-+
-+    fn contains(&self, address: usize) -> bool {
-+        // Use a locked read-modify-write, not a potentially stale load. It observes the latest
-+        // slot modification, so an address removed before unmap cannot authorize a later,
-+        // unrelated allocation reusing that address. Exclusive Vec ownership prevents the
-+        // currently matching allocation from being deallocated before the caller's advice.
-+        address != 0
-+            && self
-+                .slot(address)
-+                .compare_exchange(address, address, Ordering::SeqCst, Ordering::SeqCst)
-+                .is_ok()
-+    }
-+}
-+
-+impl LargeBlocks {
-+    /// An idle block of the class, if there is one.
-+    fn take(&self, class: usize) -> Option<usize> {
-+        if self.counts[class].load(Ordering::Relaxed) == 0 {
-+            return None;
-+        }
-+        for slot in &self.slots[class] {
-+            if slot.load(Ordering::Relaxed) != 0 {
-+                let block = slot.swap(0, Ordering::Acquire);
-+                if block != 0 {
-+                    self.counts[class].fetch_sub(1, Ordering::Relaxed);
-+                    self.idle.fetch_sub(large_class_size(class), Ordering::Relaxed);
-+                    return Some(block);
-+                }
-+            }
-+        }
-+        None
-+    }
-+
-+    /// Keeps a freed block of the class, unless the cache is full; the counters go up before the
-+    /// block is visible, so they never fall below what the slots hold.
-+    fn keep(&self, class: usize, block: usize) -> bool {
-+        let size = large_class_size(class);
-+        if self.idle.fetch_add(size, Ordering::Relaxed) + size > LARGE_IDLE_CAP {
-+            self.idle.fetch_sub(size, Ordering::Relaxed);
-+            return false;
-+        }
-+        self.counts[class].fetch_add(1, Ordering::Relaxed);
-+        for slot in &self.slots[class] {
-+            if slot.compare_exchange(0, block, Ordering::Release, Ordering::Relaxed).is_ok() {
-+                return true;
-+            }
-+        }
-+        self.counts[class].fetch_sub(1, Ordering::Relaxed);
-+        self.idle.fetch_sub(size, Ordering::Relaxed);
-+        false
-+    }
-+
-+    /// An idle block of the largest class that has one, with its size, while the idle memory is
-+    /// above the low-water mark.
-+    fn evict(&self) -> Option<(usize, usize)> {
-+        if self.idle.load(Ordering::Relaxed) <= LARGE_LOW_WATER {
-+            return None;
-+        }
-+        (0..LARGE_CLASSES)
-+            .rev()
-+            .find_map(|class| Some((self.take(class)?, large_class_size(class))))
-+    }
-+}
-+
-+/// The class of a block the cache serves, or `None` for one the system allocator serves.
-+fn large_class(layout: Layout) -> Option<usize> {
-+    let size = layout.size();
-+    if size < 1 << LARGE_MIN_LOG || size > 1 << LARGE_MAX_LOG || layout.align() > 4096 {
-+        return None;
-+    }
-+    if size == 1 << LARGE_MIN_LOG {
-+        return Some(0);
-+    }
-+    // 2^k < size <= 2^(k + 1), rounded up to a quarter of 2^k.
-+    let k = usize::BITS - 1 - (size - 1).leading_zeros();
-+    Some(((k - LARGE_MIN_LOG) * 4) as usize + size.div_ceil(1 << (k - 2)) - 4)
-+}
-+
-+fn large_class_size(class: usize) -> usize {
-+    if class == 0 {
-+        return 1 << LARGE_MIN_LOG;
-+    }
-+    ((class - 1) % 4 + 5) << (LARGE_MIN_LOG + ((class - 1) / 4) as u32 - 2)
-+}
-+
-+#[cfg(unix)]
-+unsafe impl GlobalAlloc for LargeBlockCache {
-+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-+        let Some(class) = large_class(layout) else {
-+            return System.alloc(layout);
-+        };
-+        if let Some(block) = LARGE_BLOCKS.take(class) {
-+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+            LIVE_ANONYMOUS_BLOCKS.register(block);
-+            return block as *mut u8;
-+        }
-+        let size = large_class_size(class);
-+        let mut freed = 0;
-+        while freed < size
-+            && let Some((block, block_size)) = LARGE_BLOCKS.evict()
-+        {
-+            munmap(block as *mut core::ffi::c_void, block_size);
-+            freed += block_size;
-+        }
-+        let align = if size >= HUGE_PAGE { HUGE_PAGE } else { 1 };
-+        let len = size + align - 1;
-+        let mapped = mmap(
-+            std::ptr::null_mut(),
-+            len,
-+            PROT_READ | PROT_WRITE,
-+            MAP_PRIVATE | MAP_ANONYMOUS,
-+            -1,
-+            0,
++    #[test]
++    fn very_packed_slices_have_actual_lengths() {
++        let mut column = SecureColumnByCoords::<SimdBackend>::zeros(128);
++        let chunks = column.very_packed_chunks_mut(1).collect::<Vec<_>>();
++        assert_eq!(chunks.len(), 4);
++        assert!(
++            chunks.iter().all(|chunk| chunk.0.iter().all(|coordinate| coordinate.0.len() == 1))
 +        );
-+        if mapped as isize == -1 {
-+            return std::ptr::null_mut();
++        drop(chunks);
++        for (i, mut chunk) in column.very_packed_chunks_mut(1).enumerate() {
++            // SAFETY: each checked coordinate slice contains exactly one element.
++            unsafe { chunk.set_packed(0, VeryPackedQM31::broadcast(SecureField::from(i + 1))) };
 +        }
-+        // Trim the mapping to the aligned block; the trimmed ends were never touched.
-+        let start = mapped as usize;
-+        let block = (start + align - 1) & !(align - 1);
-+        if block > start {
-+            munmap(mapped, block - start);
++        for i in 0..128 {
++            assert_eq!(column.at(i), SecureField::from(i / 32 + 1));
 +        }
-+        if start + len > block + size {
-+            munmap((block + size) as *mut core::ffi::c_void, start + len - block - size);
-+        }
-+        // In `madvise` THP mode the alignment alone buys nothing: ask for huge pages, so the
-+        // block takes one fault per 2 MiB instead of 512. A hint; the block is correct either way.
-+        #[cfg(target_os = "linux")]
-+        if align == HUGE_PAGE {
-+            madvise(block as *mut core::ffi::c_void, size, 14);
-+        }
-+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+        LIVE_ANONYMOUS_BLOCKS.register(block);
-+        block as *mut u8
 +    }
 +
-+    unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
-+        let Some(class) = large_class(layout) else {
-+            return System.dealloc(block, layout);
-+        };
-+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-+        LIVE_ANONYMOUS_BLOCKS.unregister(block as usize);
-+        if !LARGE_BLOCKS.keep(class, block as usize) {
-+            munmap(block.cast(), large_class_size(class));
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn parallel_very_packed_slices_have_actual_lengths() {
++        let mut column = SecureColumnByCoords::<SimdBackend>::zeros(128);
++        assert_eq!(column.par_very_packed_chunks_mut(1).count(), 4);
++        column.par_very_packed_chunks_mut(1).enumerate().for_each(|(i, mut chunk)| {
++            // SAFETY: coordinate slices each contain one element, disjoint across tasks.
++            unsafe { chunk.set_packed(0, VeryPackedQM31::broadcast(SecureField::from(i + 1))) };
++        });
++        for i in 0..128 {
++            assert_eq!(column.at(i), SecureField::from(i / 32 + 1));
 +        }
 +    }
 +}
-+
- #[cfg(test)]
- mod tests {
-     use std::array;
 diff --git a/crates/stwo/src/prover/backend/simd/fft/ifft.rs b/crates/stwo/src/prover/backend/simd/fft/ifft.rs
-index 998ce93d..b7ee9924 100644
+index 998ce93d..1e29c031 100644
 --- a/crates/stwo/src/prover/backend/simd/fft/ifft.rs
 +++ b/crates/stwo/src/prover/backend/simd/fft/ifft.rs
 @@ -1,5 +1,6 @@
  //! Inverse fft.
- 
+
 +use std::cell::RefCell;
  use std::simd::{simd_swizzle, u32x2, u32x4, u32x16};
- 
+
  use itertools::Itertools;
 @@ -13,7 +14,7 @@ use crate::core::circle::Coset;
  use crate::core::utils::bit_reverse;
@@ -4256,7 +4649,7 @@ index 998ce93d..b7ee9924 100644
  use crate::prover::backend::simd::m31::{LOG_N_LANES, PackedBaseField};
 -use crate::prover::backend::simd::utils::UnsafeMut;
 +use crate::prover::backend::simd::utils::{UnsafeConst, UnsafeMut};
- 
+
  /// Performs an Inverse Circle Fast Fourier Transform (ICFFT) on the given values.
  ///
 @@ -53,6 +54,7 @@ pub unsafe fn ifft(values: *mut u32, twiddle_dbl: &[&[u32]], log_n_elements: usi
@@ -4266,7 +4659,7 @@ index 998ce93d..b7ee9924 100644
 +        None,
      );
  }
- 
+
 @@ -88,17 +90,33 @@ pub unsafe fn ifft_lower_with_vecwise(
      let values = UnsafeMut(values);
      parallel_iter!(0..1 << (log_size - fft_layers)).for_each(|index_h| {
@@ -4320,7 +4713,7 @@ index 998ce93d..b7ee9924 100644
 +    scale: Option<PackedBaseField>,
  ) {
      assert!(log_size >= LOG_N_LANES as usize);
- 
+
 @@ -144,13 +166,13 @@ pub unsafe fn ifft_lower_without_vecwise(
              let fixed_layer = layer + LOG_N_LANES as usize;
              match fft_layers - layer {
@@ -4338,7 +4731,7 @@ index 998ce93d..b7ee9924 100644
                          values,
                          &twiddle_dbl[layer..],
                          fft_layers - layer - 3,
-@@ -160,43 +182,154 @@ pub unsafe fn ifft_lower_without_vecwise(
+@@ -160,43 +182,155 @@ pub unsafe fn ifft_lower_without_vecwise(
                  }
              }
          }
@@ -4351,7 +4744,7 @@ index 998ce93d..b7ee9924 100644
 +        }
      });
  }
- 
+
 -/// Runs the first 5 ifft layers across the entire array.
 +/// The log of the size in bytes of the thread local buffer in which [`ifft_out_of_place`]
 +/// computes a group of neighbouring blocks.
@@ -4415,6 +4808,7 @@ index 998ce93d..b7ee9924 100644
 -        val0.store(values.add(index * 32));
 -        val1.store(values.add(index * 32 + 16));
 -    }
++    super::validate_twiddles(twiddle_dbl, log_n_elements);
 +    const VECWISE_FFT_BITS: usize = LOG_N_LANES as usize + 1;
 +    assert!(log_n_elements > CACHED_FFT_LOG_SIZE as usize);
 +
@@ -4518,18 +4912,18 @@ index 998ce93d..b7ee9924 100644
 +        Some(scale),
 +    );
  }
- 
+
  /// Runs 3 ifft layers across the entire array.
-@@ -213,7 +346,7 @@ pub unsafe fn ifft_vecwise_loop(
+@@ -213,7 +347,7 @@ pub unsafe fn ifft_vecwise_loop(
  /// # Safety
  ///
  /// Behavior is undefined if `values` does not have the same alignment as [`PackedBaseField`].
 -pub unsafe fn ifft3_loop(
-+pub unsafe fn ifft3_loop<const LOCAL: bool>(
++unsafe fn ifft3_loop<const LOCAL: bool>(
      values: *mut u32,
      twiddle_dbl: &[&[u32]],
      loop_bits: usize,
-@@ -222,7 +355,7 @@ pub unsafe fn ifft3_loop(
+@@ -222,7 +356,7 @@ pub unsafe fn ifft3_loop(
  ) {
      for index_l in 0..1 << loop_bits {
          let index = (index_h << loop_bits) + index_l;
@@ -4538,7 +4932,7 @@ index 998ce93d..b7ee9924 100644
          let twiddles0: [u32x16; 4] = std::array::from_fn(|i| {
              u32x16::splat(
                  *twiddle_dbl[0].get_unchecked((index * 4 + i) & (twiddle_dbl[0].len() - 1)),
-@@ -256,8 +389,13 @@ pub unsafe fn ifft3_loop(
+@@ -256,8 +390,13 @@ pub unsafe fn ifft3_loop(
  /// # Safety
  ///
  /// Behavior is undefined if `values` does not have the same alignment as [`PackedBaseField`].
@@ -4554,7 +4948,7 @@ index 998ce93d..b7ee9924 100644
      let twiddles0: [u32x16; 2] = std::array::from_fn(|i| {
          u32x16::splat(*twiddle_dbl[0].get_unchecked((index * 2 + i) & (twiddle_dbl[0].len() - 1)))
      });
-@@ -281,8 +419,13 @@ unsafe fn ifft2_loop(values: *mut u32, twiddle_dbl: &[&[u32]], layer: usize, ind
+@@ -281,8 +420,13 @@ unsafe fn ifft2_loop(values: *mut u32, twiddle_dbl: &[&[u32]], layer: usize, ind
  /// # Safety
  ///
  /// Behavior is undefined if `values` does not have the same alignment as [`PackedBaseField`].
@@ -4570,17 +4964,42 @@ index 998ce93d..b7ee9924 100644
      let twiddles0: [u32x16; 1] = std::array::from_fn(|i| {
          u32x16::splat(*twiddle_dbl[0].get_unchecked((index + i) & (twiddle_dbl[0].len() - 1)))
      });
+diff --git a/crates/stwo/src/prover/backend/simd/fft/mod.rs b/crates/stwo/src/prover/backend/simd/fft/mod.rs
+index 469ee987..aa9678e7 100644
+--- a/crates/stwo/src/prover/backend/simd/fft/mod.rs
++++ b/crates/stwo/src/prover/backend/simd/fft/mod.rs
+@@ -15,6 +15,20 @@ pub const CACHED_FFT_LOG_SIZE: u32 = 16;
+
+ pub const MIN_FFT_LOG_SIZE: u32 = 5;
+
++/// Validate the complete layer shape before any kernel uses unchecked twiddle indexing.
++/// Layer zero combines the two lowest circle layers, hence `N/4` rather than `N/2`.
++pub(super) fn validate_twiddles(twiddles: &[&[u32]], log_size: usize) {
++    assert!((MIN_FFT_LOG_SIZE as usize..=30).contains(&log_size), "unsupported SIMD FFT size");
++    assert_eq!(twiddles.len(), log_size - 1, "invalid FFT twiddle layer count");
++    for (layer, values) in twiddles.iter().enumerate() {
++        assert_eq!(
++            values.len(),
++            1usize << (log_size - 2 - layer),
++            "invalid FFT twiddle layer size"
++        );
++    }
++}
++
+ // TODO(andrew): FFTs return a redundant representation, that can get the value P. need to deal with
+ // it. Either: reduce before commitment or regenerate proof with new seed if redundant value
+ // decommitted.
 diff --git a/crates/stwo/src/prover/backend/simd/fft/rfft.rs b/crates/stwo/src/prover/backend/simd/fft/rfft.rs
-index b522d763..4deb9861 100644
+index b522d763..66da51a6 100644
 --- a/crates/stwo/src/prover/backend/simd/fft/rfft.rs
 +++ b/crates/stwo/src/prover/backend/simd/fft/rfft.rs
 @@ -1,6 +1,7 @@
  //! Regular (forward) fft.
- 
+
  use std::array;
 +use std::cell::RefCell;
  use std::simd::{simd_swizzle, u32x2, u32x4, u32x8, u32x16};
- 
+
  use itertools::Itertools;
 @@ -98,13 +99,13 @@ pub unsafe fn fft_lower_with_vecwise(
          for layer in (VECWISE_FFT_BITS..fft_layers).step_by(3).rev() {
@@ -4623,7 +5042,7 @@ index b522d763..4deb9861 100644
 +        }
      });
  }
- 
+
 @@ -157,13 +174,13 @@ pub unsafe fn fft_lower_without_vecwise(
              let fixed_layer = layer + LOG_N_LANES as usize;
              match fft_layers - layer {
@@ -4641,10 +5060,10 @@ index b522d763..4deb9861 100644
                          src,
                          dst,
                          &twiddle_dbl[layer..],
-@@ -178,41 +195,155 @@ pub unsafe fn fft_lower_without_vecwise(
+@@ -178,41 +195,158 @@ pub unsafe fn fft_lower_without_vecwise(
      });
  }
- 
+
 -/// Runs the last 5 fft layers across the entire array.
 +/// The log of the size in bytes of the thread local buffer in which [`fft_subdomains`] computes a
 +/// group of neighbouring blocks.
@@ -4710,6 +5129,9 @@ index b522d763..4deb9861 100644
 -            array::from_fn(|i| *twiddle_dbl[0].get_unchecked(index * 8 + i)),
 -            array::from_fn(|i| *twiddle_dbl[1].get_unchecked(index * 4 + i)),
 -            array::from_fn(|i| *twiddle_dbl[2].get_unchecked(index * 2 + i)),
++    for twiddles in subdomain_twiddles {
++        super::validate_twiddles(twiddles, log_n_elements);
++    }
 +    if log_n_elements <= CACHED_FFT_LOG_SIZE as usize {
 +        for (i, twiddle_dbl) in subdomain_twiddles.iter().enumerate() {
 +            fft(src, dst.add(i << log_n_elements), twiddle_dbl, log_n_elements);
@@ -4821,8 +5243,8 @@ index b522d763..4deb9861 100644
 -        val1.store(dst.add(index * 32 + 16));
      }
  }
- 
-@@ -231,7 +362,7 @@ unsafe fn fft_vecwise_loop(
+
+@@ -231,7 +365,7 @@ unsafe fn fft_vecwise_loop(
  /// # Safety
  ///
  /// Behavior is undefined if `src` and `dst` do not have the same alignment as [`PackedBaseField`].
@@ -4831,7 +5253,7 @@ index b522d763..4deb9861 100644
      src: *const u32,
      dst: *mut u32,
      twiddle_dbl: &[&[u32]],
-@@ -241,7 +372,7 @@ unsafe fn fft3_loop(
+@@ -241,7 +375,7 @@ unsafe fn fft3_loop(
  ) {
      for index_l in 0..1 << loop_bits {
          let index = (index_h << loop_bits) + index_l;
@@ -4840,7 +5262,7 @@ index b522d763..4deb9861 100644
          let twiddles0: [u32x16; 4] = array::from_fn(|i| {
              u32x16::splat(
                  *twiddle_dbl[0].get_unchecked((index * 4 + i) & (twiddle_dbl[0].len() - 1)),
-@@ -276,14 +407,14 @@ unsafe fn fft3_loop(
+@@ -276,14 +410,14 @@ unsafe fn fft3_loop(
  /// # Safety
  ///
  /// Behavior is undefined if `src` and `dst` do not have the same alignment as [`PackedBaseField`].
@@ -4857,7 +5279,7 @@ index b522d763..4deb9861 100644
      let twiddles0: [u32x16; 2] = array::from_fn(|i| {
          u32x16::splat(*twiddle_dbl[0].get_unchecked((index * 2 + i) & (twiddle_dbl[0].len() - 1)))
      });
-@@ -308,14 +439,14 @@ unsafe fn fft2_loop(
+@@ -308,14 +442,14 @@ unsafe fn fft2_loop(
  /// # Safety
  ///
  /// Behavior is undefined if `src` and `dst` do not have the same alignment as [`PackedBaseField`].
@@ -4879,14 +5301,14 @@ index 4d662ccb..a168aa22 100644
 --- a/crates/stwo/src/prover/backend/simd/m31.rs
 +++ b/crates/stwo/src/prover/backend/simd/m31.rs
 @@ -68,10 +68,34 @@ unsafe impl Sync for PackedM31 {}
- 
+
  impl PackedM31 {
      /// Constructs a new instance with all vector elements set to `value`.
 +    #[inline(always)]
      pub const fn broadcast(M31(value): M31) -> Self {
          Self(Simd::splat(value))
      }
- 
+
 +    /// Returns `self * rhs` with the multiplication kernel expanded at the call site.
 +    ///
 +    /// `Mul for PackedM31` calls the out of line `mul_*` wrapper, which keeps the code of the many
@@ -4916,7 +5338,7 @@ index 4d662ccb..a168aa22 100644
 @@ -113,6 +137,7 @@ impl PackedM31 {
          self + self
      }
- 
+
 +    #[inline(always)]
      pub const fn into_simd(self) -> Simd<u32, N_LANES> {
          self.0
@@ -4944,26 +5366,26 @@ index 4d662ccb..a168aa22 100644
 +        #[inline(always)]
          pub(crate) fn mul_doubled_simd(a: PackedM31, b_double: u32x16) -> PackedM31 {
              const MASK_EVENS: Simd<u64, { N_LANES / 2 }> = Simd::from_array([0xFFFFFFFF; { N_LANES / 2 }]);
- 
+
 diff --git a/crates/stwo/src/prover/backend/simd/qm31.rs b/crates/stwo/src/prover/backend/simd/qm31.rs
 index dc8ef880..7e8e5c8b 100644
 --- a/crates/stwo/src/prover/backend/simd/qm31.rs
 +++ b/crates/stwo/src/prover/backend/simd/qm31.rs
 @@ -27,16 +27,19 @@ unsafe impl Sync for PackedQM31 {}
- 
+
  impl PackedQM31 {
      /// Constructs a new instance with all vector elements set to `value`.
 +    #[inline(always)]
      pub const fn broadcast(value: QM31) -> Self {
          Self([PackedCM31::broadcast(value.0), PackedCM31::broadcast(value.1)])
      }
- 
+
      /// Returns all `a` values such that each vector element is represented as `a + bu`.
 +    #[inline(always)]
      pub const fn a(&self) -> PackedCM31 {
          self.0[0]
      }
- 
+
      /// Returns all `b` values such that each vector element is represented as `a + bu`.
 +    #[inline(always)]
      pub const fn b(&self) -> PackedCM31 {
@@ -4971,14 +5393,14 @@ index dc8ef880..7e8e5c8b 100644
      }
 @@ -77,6 +80,7 @@ impl PackedQM31 {
      }
- 
+
      /// Doubles each element in the vector.
 +    #[inline(always)]
      pub fn double(self) -> Self {
          let Self([a, b]) = self;
          Self([a.double(), b.double()])
 @@ -84,6 +88,7 @@ impl PackedQM31 {
- 
+
      /// Returns vectors `a, b, c, d` such that element `i` is represented as
      /// `QM31(a_i, b_i, c_i, d_i)`.
 +    #[inline(always)]
@@ -4986,7 +5408,7 @@ index dc8ef880..7e8e5c8b 100644
          let Self([PackedCM31([a, b]), PackedCM31([c, d])]) = self;
          [a, b, c, d]
 @@ -91,6 +96,7 @@ impl PackedQM31 {
- 
+
      /// Creates an instance from vectors `a, b, c, d` such that element `i`
      /// is represented as `QM31(a_i, b_i, c_i, d_i)`.
 +    #[inline(always)]
@@ -4996,7 +5418,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -99,6 +105,7 @@ impl PackedQM31 {
  impl Add for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn add(self, rhs: Self) -> Self::Output {
          Self([self.a() + rhs.a(), self.b() + rhs.b()])
@@ -5004,13 +5426,13 @@ index dc8ef880..7e8e5c8b 100644
 @@ -107,35 +114,63 @@ impl Add for PackedQM31 {
  impl Sub for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn sub(self, rhs: Self) -> Self::Output {
          Self([self.a() - rhs.a(), self.b() - rhs.b()])
      }
  }
- 
+
 -impl Mul for PackedQM31 {
 -    type Output = Self;
 -
@@ -5066,7 +5488,7 @@ index dc8ef880..7e8e5c8b 100644
 +pub(crate) fn mul_qm31_m31(a: PackedQM31, b: PackedM31) -> PackedQM31 {
 +    a.mul_m31_inline(b)
  }
- 
+
  impl Zero for PackedQM31 {
 +    #[inline(always)]
      fn zero() -> Self {
@@ -5074,21 +5496,21 @@ index dc8ef880..7e8e5c8b 100644
      }
 @@ -146,18 +181,21 @@ impl Zero for PackedQM31 {
  }
- 
+
  impl One for PackedQM31 {
 +    #[inline(always)]
      fn one() -> Self {
          Self([PackedCM31::one(), PackedCM31::zero()])
      }
  }
- 
+
  impl AddAssign for PackedQM31 {
 +    #[inline(always)]
      fn add_assign(&mut self, rhs: Self) {
          *self = *self + rhs;
      }
  }
- 
+
  impl MulAssign for PackedQM31 {
 +    #[inline(always)]
      fn mul_assign(&mut self, rhs: Self) {
@@ -5097,7 +5519,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -242,6 +280,7 @@ pub fn batch_inverse_packed_qm31(column: &[PackedQM31], dst: &mut [PackedQM31])
  impl Add<PackedM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn add(self, rhs: PackedM31) -> Self::Output {
          Self([self.a() + rhs, self.b()])
@@ -5105,7 +5527,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -250,15 +289,16 @@ impl Add<PackedM31> for PackedQM31 {
  impl Mul<PackedM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn mul(self, rhs: PackedM31) -> Self::Output {
 -        let Self([a, b]) = self;
@@ -5113,10 +5535,10 @@ index dc8ef880..7e8e5c8b 100644
 +        mul_qm31_m31(self, rhs)
      }
  }
- 
+
  impl Mul<PackedCM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn mul(self, rhs: PackedCM31) -> Self::Output {
          let Self([a, b]) = self;
@@ -5124,7 +5546,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -268,6 +308,7 @@ impl Mul<PackedCM31> for PackedQM31 {
  impl Sub<PackedM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn sub(self, rhs: PackedM31) -> Self::Output {
          let Self([a, b]) = self;
@@ -5132,7 +5554,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -277,6 +318,7 @@ impl Sub<PackedM31> for PackedQM31 {
  impl Add<QM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn add(self, rhs: QM31) -> Self::Output {
          self + PackedQM31::broadcast(rhs)
@@ -5140,7 +5562,7 @@ index dc8ef880..7e8e5c8b 100644
 @@ -285,6 +327,7 @@ impl Add<QM31> for PackedQM31 {
  impl Sub<QM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn sub(self, rhs: QM31) -> Self::Output {
          self - PackedQM31::broadcast(rhs)
@@ -5148,14 +5570,14 @@ index dc8ef880..7e8e5c8b 100644
 @@ -293,6 +336,7 @@ impl Sub<QM31> for PackedQM31 {
  impl Mul<QM31> for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn mul(self, rhs: QM31) -> Self::Output {
          self * PackedQM31::broadcast(rhs)
      }
 @@ -317,6 +361,7 @@ impl Add<M31> for PackedQM31 {
  }
- 
+
  impl SubAssign for PackedQM31 {
 +    #[inline(always)]
      fn sub_assign(&mut self, rhs: Self) {
@@ -5164,14 +5586,14 @@ index dc8ef880..7e8e5c8b 100644
 @@ -352,6 +397,7 @@ impl<'a> Sum<&'a Self> for PackedQM31 {
  impl Neg for PackedQM31 {
      type Output = Self;
- 
+
 +    #[inline(always)]
      fn neg(self) -> Self::Output {
          let Self([a, b]) = self;
          Self([-a, -b])
 @@ -365,6 +411,7 @@ impl Distribution<PackedQM31> for StandardUniform {
  }
- 
+
  impl From<PackedM31> for PackedQM31 {
 +    #[inline(always)]
      fn from(value: PackedM31) -> Self {
@@ -5179,7 +5601,7 @@ index dc8ef880..7e8e5c8b 100644
              value,
 @@ -376,6 +423,7 @@ impl From<PackedM31> for PackedQM31 {
  }
- 
+
  impl From<QM31> for PackedQM31 {
 +    #[inline(always)]
      fn from(value: QM31) -> Self {
@@ -5192,13 +5614,13 @@ index 709e1b70..eb7d9da3 100644
 @@ -1,18 +1,19 @@
  use std::iter::zip;
 +use std::simd::u64x8;
- 
+
  use itertools::{Itertools, zip_eq};
  use num_traits::Zero;
  #[cfg(feature = "parallel")]
 -use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 +use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
- 
+
  use super::SimdBackend;
 -use super::column::CM31Column;
 +use super::column::{BaseColumn, CM31Column};
@@ -5233,13 +5655,13 @@ index 709e1b70..eb7d9da3 100644
 +                ]
 +            })
 +            .collect();
- 
+
          // Precompute values needed inside the loop.
          let log_ratios: Vec<u32> = accumulations
 @@ -146,9 +162,17 @@ impl QuotientOps for SimdBackend {
              let mut chunk_acc = [PackedSecureField::zero(); COMBINE_CHUNK_SIZE];
              let chunk_acc = &mut chunk_acc[..packed_chunk_len];
- 
+
 +            let mut denominators = Vec::with_capacity(sample_coords.len() * packed_chunk_len);
 +            for [prx, pry, pix, piy] in &sample_coords {
 +                for points in &subdomain_points[chunk_start..chunk_start + packed_chunk_len] {
@@ -5256,14 +5678,14 @@ index 709e1b70..eb7d9da3 100644
                  .zip_eq(first_linear_terms.iter())
              {
 @@ -167,7 +191,7 @@ impl QuotientOps for SimdBackend {
- 
+
                      let numerator = lifted_partial_numerator
                          - *first_linear_term * subdomain_points[domain_idx].y;
 -                    *accumulator += numerator * den_inv[domain_idx];
 +                    *accumulator += numerator * den_inv[i];
                  }
              }
- 
+
 @@ -177,6 +201,14 @@ impl QuotientOps for SimdBackend {
                  }
              }
@@ -5308,7 +5730,7 @@ index 709e1b70..eb7d9da3 100644
 -            }),
 +            columns: columns.try_into().unwrap_or_else(|_| unreachable!("four coordinates")),
          };
- 
+
          SecureEvaluation::new(eval_domain, evals)
 @@ -205,6 +244,14 @@ impl QuotientOps for SimdBackend {
  /// Note that `columns` are assumed to be evaluations over a possibly larger domain containing
@@ -5360,10 +5782,10 @@ index 709e1b70..eb7d9da3 100644
 +            }
 +        }
 +    }
- 
+
      let mut values =
          unsafe { SecureColumnByCoords::<SimdBackend>::uninitialized(subdomain.size()) };
- 
+
 +    // Per-term data, shared by all chunks.
 +    let terms: Vec<(&[PackedBaseField], [u32; 4])> =
 +        zip_eq(&sample_batch.cols_vals_randpows, quotient_coeffs)
@@ -5384,9 +5806,9 @@ index 709e1b70..eb7d9da3 100644
 +
      #[cfg(not(feature = "parallel"))]
      let iter = values.chunks_mut(NUMERATORS_CHUNK_SIZE);
- 
+
 @@ -225,63 +321,65 @@ fn accumulate_numerators_on_subdomain(
- 
+
      iter.enumerate().for_each(|(chunk_idx, mut values_dst)| {
          let chunk_start = chunk_idx * NUMERATORS_CHUNK_SIZE;
 -        // Initialize accumulators for the chunk.
@@ -5443,7 +5865,7 @@ index 709e1b70..eb7d9da3 100644
 +                _ => {}
              }
 -        }
- 
+
 -        for (i, acc) in accumulators.iter().enumerate() {
 -            unsafe {
 -                values_dst.set_packed(i, *acc);
@@ -5463,7 +5885,7 @@ index 709e1b70..eb7d9da3 100644
      });
      values
  }
- 
+
 -fn denominator_inverses(
 -    sample_points: &[CirclePoint<SecureField>],
 -    domain: CircleDomain,
@@ -5498,12 +5920,24 @@ index 709e1b70..eb7d9da3 100644
  mod tests {
      use itertools::Itertools;
 diff --git a/crates/stwo/src/prover/backend/simd/very_packed_m31.rs b/crates/stwo/src/prover/backend/simd/very_packed_m31.rs
-index 9ae97d10..4006619e 100644
+index 9ae97d10..211be43b 100644
 --- a/crates/stwo/src/prover/backend/simd/very_packed_m31.rs
 +++ b/crates/stwo/src/prover/backend/simd/very_packed_m31.rs
-@@ -19,11 +19,17 @@ pub const N_VERY_PACKED_ELEMS: usize = 1 << LOG_N_VERY_PACKED_ELEMS;
+@@ -14,16 +14,29 @@ use crate::core::fields::{FieldExpOps, batch_inverse_in_place};
+ pub const LOG_N_VERY_PACKED_ELEMS: u32 = 1;
+ pub const N_VERY_PACKED_ELEMS: usize = 1 << LOG_N_VERY_PACKED_ELEMS;
+
++/// Zero initialization requires zero-valid elements, not merely `Copy` elements.
++/// ```compile_fail
++/// use bytemuck::Zeroable;
++/// use std::num::NonZeroU32;
++/// use stwo::prover::backend::simd::very_packed_m31::Vectorized;
++/// let _ = Vectorized::<NonZeroU32, 1>::zeroed();
++/// ```
+ #[derive(Clone, Debug, Copy)]
+ #[repr(transparent)]
  pub struct Vectorized<A: Copy, const N: usize>(pub [A; N]);
- 
+
  impl<A: Copy, const N: usize> Vectorized<A, N> {
 -    pub fn from_fn<F>(cb: F) -> Self
 +    #[inline(always)]
@@ -5520,36 +5954,46 @@ index 9ae97d10..4006619e 100644
 +        Vectorized(out)
      }
  }
- 
-@@ -48,6 +54,7 @@ pub type VeryPackedBaseField = VeryPackedM31;
+
+@@ -33,7 +46,8 @@ impl<A: Copy, const N: usize> From<[A; N]> for Vectorized<A, N> {
+     }
+ }
+
+-unsafe impl<A: Copy, const N: usize> Zeroable for Vectorized<A, N> {
++// SAFETY: every element admits the zero bit pattern, and the wrapper is transparent.
++unsafe impl<A: Copy + Zeroable, const N: usize> Zeroable for Vectorized<A, N> {
+     fn zeroed() -> Self {
+         unsafe { core::mem::zeroed() }
+     }
+@@ -48,6 +62,7 @@ pub type VeryPackedBaseField = VeryPackedM31;
  pub type VeryPackedSecureField = VeryPackedQM31;
- 
+
  impl VeryPackedM31 {
 +    #[inline(always)]
      pub fn broadcast(value: M31) -> Self {
          Self::from_fn(|_| PackedM31::broadcast(value))
      }
-@@ -73,31 +80,37 @@ impl VeryPackedM31 {
+@@ -73,31 +88,37 @@ impl VeryPackedM31 {
  }
- 
+
  impl VeryPackedCM31 {
 +    #[inline(always)]
      pub fn broadcast(value: CM31) -> Self {
          Self::from_fn(|_| PackedCM31::broadcast(value))
      }
  }
- 
+
  impl VeryPackedQM31 {
 +    #[inline(always)]
      pub fn broadcast(value: QM31) -> Self {
          Self::from_fn(|_| PackedQM31::broadcast(value))
      }
- 
+
 +    #[inline(always)]
      pub fn from_very_packed_m31s([a, b, c, d]: [VeryPackedM31; 4]) -> Self {
          Self::from_fn(|i| PackedQM31::from_packed_m31s([a.0[i], b.0[i], c.0[i], d.0[i]]))
      }
- 
+
 +    #[inline(always)]
      pub fn into_very_packed_m31s(self) -> [VeryPackedM31; 4] {
          std::array::from_fn(|i| VeryPackedM31::from(self.0.map(|v| v.into_packed_m31s()[i])))
@@ -5561,24 +6005,24 @@ index 9ae97d10..4006619e 100644
          Self::broadcast(v)
      }
  }
- 
+
  impl From<VeryPackedM31> for VeryPackedQM31 {
 +    #[inline(always)]
      fn from(value: VeryPackedM31) -> Self {
          VeryPackedQM31::from_very_packed_m31s([
              value,
-@@ -109,6 +122,7 @@ impl From<VeryPackedM31> for VeryPackedQM31 {
+@@ -109,6 +130,7 @@ impl From<VeryPackedM31> for VeryPackedQM31 {
  }
- 
+
  impl From<QM31> for VeryPackedQM31 {
 +    #[inline(always)]
      fn from(value: QM31) -> Self {
          VeryPackedQM31::broadcast(value)
      }
-@@ -122,12 +136,79 @@ impl Scalar for PackedM31 {}
+@@ -122,12 +144,79 @@ impl Scalar for PackedM31 {}
  impl Scalar for PackedCM31 {}
  impl Scalar for PackedQM31 {}
- 
+
 +/// Multiplication used by the [`Vectorized`] operators, which the constraint evaluators are
 +/// written against. It defaults to `Mul`; the lane-wise base field product overrides it with the
 +/// multiplication kernel expanded at the call site ([`PackedM31::mul_inline`]).
@@ -5650,37 +6094,37 @@ index 9ae97d10..4006619e 100644
      <A as Add<B>>::Output: Copy,
  {
      type Output = Vectorized<A::Output, N>;
- 
+
 +    #[inline(always)]
      fn add(self, other: Vectorized<B, N>) -> Self::Output {
          Vectorized::from_fn(|i| self.0[i] + other.0[i])
      }
-@@ -139,6 +220,7 @@ where
+@@ -139,6 +228,7 @@ where
  {
      type Output = Vectorized<A::Output, N>;
- 
+
 +    #[inline(always)]
      fn add(self, other: B) -> Self::Output {
          Vectorized::from_fn(|i| self.0[i] + other)
      }
-@@ -150,6 +232,7 @@ where
+@@ -150,6 +240,7 @@ where
  {
      type Output = Vectorized<A::Output, N>;
- 
+
 +    #[inline(always)]
      fn sub(self, other: Vectorized<B, N>) -> Self::Output {
          Vectorized::from_fn(|i| self.0[i] - other.0[i])
      }
-@@ -161,36 +244,40 @@ where
+@@ -161,36 +252,40 @@ where
  {
      type Output = Vectorized<A::Output, N>;
- 
+
 +    #[inline(always)]
      fn sub(self, other: B) -> Self::Output {
          Vectorized::from_fn(|i| self.0[i] - other)
      }
  }
- 
+
 -impl<A: Mul<B> + Copy, B: Copy, const N: usize> Mul<Vectorized<B, N>> for Vectorized<A, N>
 +impl<A: MulInl<B> + Copy, B: Copy, const N: usize> Mul<Vectorized<B, N>> for Vectorized<A, N>
  where
@@ -5688,14 +6132,14 @@ index 9ae97d10..4006619e 100644
  {
 -    type Output = Vectorized<A::Output, N>;
 +    type Output = Vectorized<<A as Mul<B>>::Output, N>;
- 
+
 +    #[inline(always)]
      fn mul(self, other: Vectorized<B, N>) -> Self::Output {
 -        Vectorized::from_fn(|i| self.0[i] * other.0[i])
 +        Vectorized::from_fn(|i| self.0[i].mul_inl(other.0[i]))
      }
  }
- 
+
 -impl<A: Mul<B> + Copy, B: Scalar + Copy, const N: usize> Mul<B> for Vectorized<A, N>
 +impl<A: MulInl<B> + Copy, B: Scalar + Copy, const N: usize> Mul<B> for Vectorized<A, N>
  where
@@ -5703,14 +6147,14 @@ index 9ae97d10..4006619e 100644
  {
 -    type Output = Vectorized<A::Output, N>;
 +    type Output = Vectorized<<A as Mul<B>>::Output, N>;
- 
+
 +    #[inline(always)]
      fn mul(self, other: B) -> Self::Output {
 -        Vectorized::from_fn(|i| self.0[i] * other)
 +        Vectorized::from_fn(|i| self.0[i].mul_inl(other))
      }
  }
- 
+
  impl<A: AddAssign<B> + Copy, B: Copy, const N: usize> AddAssign<Vectorized<B, N>>
      for Vectorized<A, N>
  {
@@ -5718,15 +6162,15 @@ index 9ae97d10..4006619e 100644
      fn add_assign(&mut self, other: Vectorized<B, N>) {
          for i in 0..N {
              self.0[i] += other.0[i];
-@@ -199,6 +286,7 @@ impl<A: AddAssign<B> + Copy, B: Copy, const N: usize> AddAssign<Vectorized<B, N>
+@@ -199,6 +294,7 @@ impl<A: AddAssign<B> + Copy, B: Copy, const N: usize> AddAssign<Vectorized<B, N>
  }
- 
+
  impl<A: AddAssign<B> + Copy, B: Scalar + Copy, const N: usize> AddAssign<B> for Vectorized<A, N> {
 +    #[inline(always)]
      fn add_assign(&mut self, other: B) {
          for i in 0..N {
              self.0[i] += other;
-@@ -209,6 +297,7 @@ impl<A: AddAssign<B> + Copy, B: Scalar + Copy, const N: usize> AddAssign<B> for
+@@ -209,6 +305,7 @@ impl<A: AddAssign<B> + Copy, B: Scalar + Copy, const N: usize> AddAssign<B> for
  impl<A: MulAssign<B> + Copy, B: Copy, const N: usize> MulAssign<Vectorized<B, N>>
      for Vectorized<A, N>
  {
@@ -5734,18 +6178,18 @@ index 9ae97d10..4006619e 100644
      fn mul_assign(&mut self, other: Vectorized<B, N>) {
          for i in 0..N {
              self.0[i] *= other.0[i];
-@@ -229,6 +318,7 @@ where
+@@ -229,6 +326,7 @@ where
  }
- 
+
  impl<A: Zero + Copy, const N: usize> Zero for Vectorized<A, N> {
 +    #[inline(always)]
      fn zero() -> Self {
          Vectorized::from_fn(|_| A::zero())
      }
-@@ -238,13 +328,14 @@ impl<A: Zero + Copy, const N: usize> Zero for Vectorized<A, N> {
+@@ -238,13 +336,14 @@ impl<A: Zero + Copy, const N: usize> Zero for Vectorized<A, N> {
      }
  }
- 
+
 -impl<A: One + Copy, const N: usize> One for Vectorized<A, N> {
 +impl<A: One + MulInl + Copy, const N: usize> One for Vectorized<A, N> {
 +    #[inline(always)]
@@ -5753,7 +6197,7 @@ index 9ae97d10..4006619e 100644
          Vectorized::from_fn(|_| A::one())
      }
  }
- 
+
 -impl<A: FieldExpOps + Zero + Copy, const N: usize> FieldExpOps for Vectorized<A, N> {
 +impl<A: FieldExpOps + Zero + MulInl + Copy, const N: usize> FieldExpOps for Vectorized<A, N> {
      fn inverse(&self) -> Self {
@@ -5781,7 +6225,7 @@ index 68caf095..a89ffd32 100644
 +            self.merkle_tree.decommit(&decommitment_positions, columns)
 +        };
          let commitment = self.merkle_tree.root();
- 
+
          ExtendedFriLayerProof {
 @@ -387,10 +391,13 @@ impl<B: FriOps + MerkleOpsLifted<H>, H: MerkleHasherLifted> FriInnerLayerProver<
          } else {
@@ -5799,20 +6243,20 @@ index 68caf095..a89ffd32 100644
 +            self.merkle_tree.decommit(&decommitment_positions, columns)
 +        };
          let commitment = self.merkle_tree.root();
- 
+
          ExtendedFriLayerProof {
 diff --git a/crates/stwo/src/prover/mempool.rs b/crates/stwo/src/prover/mempool.rs
-index fab951c3..d060014e 100644
+index fab951c3..7a2b2157 100644
 --- a/crates/stwo/src/prover/mempool.rs
 +++ b/crates/stwo/src/prover/mempool.rs
 @@ -3,6 +3,8 @@
  //! The [`BaseColumnPool`] manages reusable [`Col<B, BaseField>`] buffers for polynomial evaluation,
  //! avoiding repeated allocation/deallocation of large column buffers during proving.
- 
+
 +use std::sync::atomic::{AtomicU32, Ordering};
 +
  use dashmap::DashMap;
- 
+
  use crate::core::fields::m31::BaseField;
 @@ -14,12 +16,15 @@ use crate::prover::backend::{Col, Column, ColumnOps};
  pub struct BaseColumnPool<B: ColumnOps<BaseField>> {
@@ -5822,26 +6266,25 @@ index fab951c3..d060014e 100644
 +    /// with room to grow to the next size, so that later larger requests can reuse them.
 +    largest_log_size: AtomicU32,
  }
- 
+
  impl<B: ColumnOps<BaseField>> BaseColumnPool<B> {
      /// Creates a new empty base column pool.
      pub fn new() -> Self {
 -        Self { pools: DashMap::new() }
 +        Self { pools: DashMap::new(), largest_log_size: AtomicU32::new(0) }
      }
- 
+
      /// Pre-allocates `count` zero-initialized buffers of size `1 << log_size`.
-@@ -41,12 +46,85 @@ impl<B: ColumnOps<BaseField>> BaseColumnPool<B> {
+@@ -41,18 +46,89 @@ impl<B: ColumnOps<BaseField>> BaseColumnPool<B> {
          })
      }
- 
--    /// Takes a buffer from the pool, or allocates a new zero-initialized one if none is available.
+
 +    /// Takes a buffer of exactly `1 << log_size` elements from the pool, if one is available.
 +    pub fn try_take(&self, log_size: u32) -> Option<Col<B, BaseField>> {
 +        self.pools.get_mut(&log_size).and_then(|mut pool| pool.pop())
 +    }
 +
-+    /// Takes a buffer from the pool, or allocates a new uninitialized one if none is available.
+     /// Takes a buffer from the pool, or allocates a new zero-initialized one if none is available.
 +    ///
 +    /// Without a buffer of the exact size, the smallest larger idle buffer is shortened to the
 +    /// requested size (where the backend supports it): its pages are already resident, which the
@@ -5887,13 +6330,11 @@ index fab951c3..d060014e 100644
 +        // size: the capacity is only reserved, its pages are not touched before they are used.
 +        let capacity_log_size =
 +            if log_size + 3 >= largest { (log_size + 1).min(largest) } else { log_size };
-+        unsafe {
-+            let mut buffer = Col::<B, BaseField>::uninitialized(1 << capacity_log_size);
-+            if capacity_log_size > log_size && !buffer.truncate(1 << log_size) {
-+                buffer = Col::<B, BaseField>::uninitialized(1 << log_size);
-+            }
-+            buffer
++        let mut buffer = Col::<B, BaseField>::zeros(1 << capacity_log_size);
++        if capacity_log_size > log_size && !buffer.truncate(1 << log_size) {
++            buffer = Col::<B, BaseField>::zeros(1 << log_size);
 +        }
++        buffer
 +    }
 +
 +    /// Drops the idle buffers that are more than two log sizes below the largest size requested
@@ -5920,15 +6361,51 @@ index fab951c3..d060014e 100644
 +            entry.value_mut().clear();
 +        }
      }
- 
+
      /// Returns a buffer to the pool. The caller is responsible for ensuring the buffer's log_size
+     /// matches.
+     pub fn give_back(&self, log_size: u32, buf: Col<B, BaseField>) {
+-        debug_assert_eq!(buf.len(), 1 << log_size);
++        assert_eq!(buf.len(), 1 << log_size, "pool buffer size mismatch");
+         self.pools.entry(log_size).or_default().push(buf);
+     }
+ }
+@@ -62,3 +138,28 @@ impl<B: ColumnOps<BaseField>> Default for BaseColumnPool<B> {
+         Self::new()
+     }
+ }
++
++#[cfg(test)]
++mod safety_review_tests {
++    use super::*;
++    use crate::prover::backend::simd::SimdBackend;
++
++    #[test]
++    fn fresh_and_regrown_buffers_are_initialized() {
++        let pool = BaseColumnPool::<SimdBackend>::new();
++        assert_eq!(pool.take_or_alloc(6).to_cpu(), vec![BaseField::from(0); 64]);
++        pool.give_back(6, (0..64).map(BaseField::from).collect());
++        let small = pool.take_or_alloc(4);
++        assert_eq!(small.to_cpu(), (0..16).map(BaseField::from).collect::<Vec<_>>());
++        pool.give_back(4, small);
++        let large = pool.take_or_alloc(6);
++        assert_eq!(&large.to_cpu()[16..], &[BaseField::from(0); 48]);
++    }
++
++    #[test]
++    #[should_panic(expected = "pool buffer size mismatch")]
++    fn rejects_incorrect_pool_size_in_release_too() {
++        let pool = BaseColumnPool::<SimdBackend>::new();
++        pool.give_back(17, Col::<SimdBackend, BaseField>::zeros(16));
++    }
++}
 diff --git a/crates/stwo/src/prover/mod.rs b/crates/stwo/src/prover/mod.rs
 index 66a11d6e..9a8b56d9 100644
 --- a/crates/stwo/src/prover/mod.rs
 +++ b/crates/stwo/src/prover/mod.rs
 @@ -11,7 +11,9 @@ use crate::core::verifier::PREPROCESSED_TRACE_IDX;
  use crate::prover::backend::BackendForChannel;
- 
+
  mod air;
 -pub use air::component_prover::{ComponentProver, ComponentProvers, Poly, Trace};
 +pub use air::component_prover::{
@@ -5943,7 +6420,7 @@ index 66a11d6e..9a8b56d9 100644
          ComponentProvers { components: components.to_vec(), n_preprocessed_columns };
 +    commitment_scheme.striped_to_coefficients();
      let trace = commitment_scheme.trace();
- 
+
      // Evaluate and commit on composition polynomial.
 @@ -71,6 +74,9 @@ pub fn prove_ex<B: BackendForChannel<MC>, MC: MerkleChannel>(
      tree_builder.extend_polys(right_comp_poly_half.into_coordinate_polys());
@@ -5952,7 +6429,7 @@ index 66a11d6e..9a8b56d9 100644
 +    // Composition's freed block temporaries stay in glibc's arenas under the samples and the
 +    // quotients unless they are handed back.
 +    crate::prover::backend::simd::column::trim_heap();
- 
+
      // Proof of work before drawing the OODS point. Raises the cost of re-rolling the OODS
      // (DEEP) challenge in search of a favorable point.
 @@ -115,6 +121,7 @@ pub fn prove_ex<B: BackendForChannel<MC>, MC: MerkleChannel>(
@@ -5962,7 +6439,7 @@ index 66a11d6e..9a8b56d9 100644
 +    crate::prover::backend::simd::circle::clear_stripe_caches();
      let proof = StarkProof(commitment_scheme_proof.proof);
      info!(proof_size_estimate = proof.size_estimate());
- 
+
 diff --git a/crates/stwo/src/prover/pcs/mod.rs b/crates/stwo/src/prover/pcs/mod.rs
 index b10181ca..967ff750 100644
 --- a/crates/stwo/src/prover/pcs/mod.rs
@@ -6022,11 +6499,11 @@ index b10181ca..967ff750 100644
 +        }
          self.trees.push(MaybeOwned::Owned(tree));
      }
- 
+
 @@ -124,9 +133,65 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
          self.trees.as_ref().map(|tree| tree.polynomials.iter().map(|poly| &poly.evals).collect())
      }
- 
+
 +    /// Turns the stripe 0 of every striped column into the column's coefficients, in place (the
 +    /// interpolation reuses the buffer), so that composition and the out-of-domain samples
 +    /// extend and evaluate from coefficients instead of regrowing them from stripe 0 at every
@@ -6088,7 +6565,7 @@ index b10181ca..967ff750 100644
 -        Trace { polys }
 +        Trace { polys, twiddles: Some(self.twiddles) }
      }
- 
+
      /// Computes the barycentric weights for every (column size, sampled point) pair, on buffers
 @@ -142,8 +207,12 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
          self.polynomials().zip_cols(sampled_points).map_cols(|(poly, points)| {
@@ -6107,7 +6584,7 @@ index b10181ca..967ff750 100644
 @@ -173,6 +242,140 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
          weights_dashmap
      }
- 
+
 +    /// Groups coefficient-free columns by domain size and projected sample point, so a backend
 +    /// can generate a small weight block once and reuse it across every column in the group.
 +    fn compute_grouped_samples(
@@ -6248,7 +6725,7 @@ index b10181ca..967ff750 100644
 @@ -183,6 +386,10 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
              span!(Level::INFO, "Evaluate columns out of domain", class = "EvaluateOutOfDomain")
                  .entered();
- 
+
 +        if !self.store_polynomials_coefficients {
 +            return self.compute_grouped_samples(sampled_points, lifting_log_size);
 +        }
@@ -6301,7 +6778,7 @@ index b10181ca..967ff750 100644
 @@ -233,25 +451,54 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
          // Evaluate polynomials on open points.
          let samples = self.compute_samples(&sampled_points, lifting_log_size);
- 
+
 +        // Interpolation weights are complete; quotient and opening paths own their buffers.
 +        self.base_column_pool.release_all_idle();
 +
@@ -6323,7 +6800,7 @@ index b10181ca..967ff750 100644
          let sampled_values =
              samples.as_cols_ref().map_cols(|x| x.iter().map(|o| o.value).collect());
          channel.mix_felts(&sampled_values.clone().flatten_cols());
- 
+
          let columns = self.evaluations();
 +        // Columns that store no values regrow their stripe 0 in bounded batches.
 +        let polynomials = self.polynomials();
@@ -6346,12 +6823,12 @@ index b10181ca..967ff750 100644
 +        // The quotients' freed accumulations stay in glibc's arenas under FRI and the
 +        // decommitment unless they are handed back.
 +        crate::prover::backend::simd::column::trim_heap();
- 
+
          // Run FRI commitment phase on the oods quotients.
          let fri_prover =
              FriProver::<B, MC>::commit(channel, self.config.fri_params, &quotients, self.twiddles);
 +        crate::prover::backend::simd::column::trim_heap();
- 
+
          // FRI decommitment phase.
          let FriDecommitResult { fri_proof, query_positions, unsorted_query_locations } =
 @@ -275,12 +522,27 @@ impl<'a, B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentSchemeProver<'a,
@@ -6398,7 +6875,7 @@ index b10181ca..967ff750 100644
                  }
              }
          }
- 
+
 +        self.base_column_pool.release_all_idle();
 +
          ExtendedCommitmentSchemeProof {
@@ -6415,7 +6892,7 @@ index b10181ca..967ff750 100644
 +            &self.commitment_scheme.base_column_pool,
 +        );
          span.exit();
- 
+
          self.extend_polys(polys)
 @@ -365,12 +638,100 @@ impl<B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentTreeProver<B, MC> {
          lifting_log_size: u32,
@@ -6522,7 +6999,7 @@ index b10181ca..967ff750 100644
 @@ -385,6 +746,221 @@ impl<B: BackendForChannel<MC>, MC: MerkleChannel> CommitmentTreeProver<B, MC> {
          CommitmentTreeProver { polynomials, commitment: tree }
      }
- 
+
 +    /// Commits the extension of `polynomials` one subdomain stripe at a time. The extension of a
 +    /// column on its domain is `2^log_blowup_factor` independent FFTs, one per subdomain of the
 +    /// coefficients' size, each writing one contiguous block of the bit-reversed evaluation.
@@ -6927,7 +7404,7 @@ index b10181ca..967ff750 100644
 +            )
 +        })
  }
- 
+
  fn print_column_size_histogram<B: BackendForChannel<MC>, MC: MerkleChannel>(
 @@ -411,3 +1164,57 @@ fn print_column_size_histogram<B: BackendForChannel<MC>, MC: MerkleChannel>(
          info!("Log size {log_size}: {count}");
@@ -6993,12 +7470,12 @@ index d2dc61ef..190dab28 100644
 +++ b/crates/stwo/src/prover/pcs/quotient_ops.rs
 @@ -1,6 +1,8 @@
  use std::iter::zip;
- 
+
  use itertools::Itertools;
 +#[cfg(feature = "parallel")]
 +use rayon::prelude::*;
  use tracing::{Level, span};
- 
+
  use crate::core::circle::CirclePoint;
 @@ -11,7 +13,7 @@ use crate::core::pcs::quotients::{
      ColumnSampleBatch, PointSample, build_samples_with_randomness_and_periodicity,
@@ -7145,13 +7622,13 @@ index d2dc61ef..190dab28 100644
 +            }
 +        }
 +    }
- 
+
      // Group and accumulate the numerators per sample point: the accumulations (of different
      // lengths) get lifted and accumulated to a single vector. After this step, there is a single
 @@ -159,6 +257,28 @@ pub fn compute_fri_quotients<B: QuotientOps + AccumulationOps>(
      )
  }
- 
+
 +/// Adds `accumulation` to the accumulation in `accumulations` of the same sample point and size,
 +/// or appends it, keeping the vector sorted by size.
 +fn add_accumulation<B: AccumulationOps>(
@@ -7184,7 +7661,7 @@ index 26d458f6..2d8b2f2b 100644
 @@ -39,6 +39,30 @@ pub trait PolyOps: ColumnOps<BaseField> + ColumnOps<SecureField> + Sized {
          iter.map(|eval| eval.interpolate_with_twiddles(twiddles)).collect()
      }
- 
+
 +    /// [`Self::interpolate`] with the buffers of `pool` where the backend supports it: the
 +    /// coefficients may be written to a buffer of the pool, and the evaluation buffer given back.
 +    fn interpolate_pooled(
@@ -7215,7 +7692,7 @@ index 26d458f6..2d8b2f2b 100644
 @@ -46,6 +70,11 @@ pub trait PolyOps: ColumnOps<BaseField> + ColumnOps<SecureField> + Sized {
          point: CirclePoint<SecureField>,
      ) -> SecureField;
- 
+
 +    /// Log size of the barycentric weights for a domain of `log_size` with `log_blowup`.
 +    fn barycentric_log_size(log_size: u32, _log_blowup: u32) -> u32 {
 +        log_size
@@ -7227,7 +7704,7 @@ index 26d458f6..2d8b2f2b 100644
 @@ -77,6 +106,35 @@ pub trait PolyOps: ColumnOps<BaseField> + ColumnOps<SecureField> + Sized {
          weights: &SecureColumnByCoords<Self>,
      ) -> SecureField;
- 
+
 +    /// Evaluates columns on the same canonic domain at `p`, sharing interpolation work.
 +    /// Each polynomial has coefficient log size at most `coset.log_size() - log_blowup`.
 +    /// Backends may interpolate from a sufficient bit-reversed prefix of the domain; the
@@ -7263,7 +7740,7 @@ index 26d458f6..2d8b2f2b 100644
 @@ -97,6 +155,64 @@ pub trait PolyOps: ColumnOps<BaseField> + ColumnOps<SecureField> + Sized {
          twiddles: &TwiddleTree<Self>,
      ) -> CircleEvaluation<Self, BaseField, BitReversedOrder>;
- 
+
 +    /// Whether [`Self::evaluate_stripe_into`] and [`Self::copy_block`] are implemented, so that
 +    /// a commitment tree can be extended and hashed one subdomain stripe at a time.
 +    const STRIPES: bool = false;
@@ -7348,13 +7825,13 @@ index 26d458f6..2d8b2f2b 100644
 +            }
 +        }
 +        let buffers: Vec<_> = buffers.into_iter().map(Option::unwrap).collect();
- 
+
          #[cfg(feature = "parallel")]
          let iter = polynomials.into_par_iter().zip(buffers.into_par_iter());
 @@ -142,6 +263,12 @@ pub trait PolyOps: ColumnOps<BaseField> + ColumnOps<SecureField> + Sized {
      /// Precomputes twiddles for a given coset.
      fn precompute_twiddles(coset: Coset) -> TwiddleTree<Self>;
- 
+
 +    /// The twiddles of `coset`, which a backend may keep and share between calls (striped trees
 +    /// regrow many columns on the same few subdomains).
 +    fn subdomain_twiddles(coset: Coset) -> std::sync::Arc<TwiddleTree<Self>> {
@@ -7374,7 +7851,7 @@ index 62692646..797e3ad5 100644
  use crate::core::vcs_lifted::verifier::PACKED_LEAF_SIZE;
 -use crate::prover::backend::{Col, ColumnOps};
 +use crate::prover::backend::{Col, Column, ColumnOps};
- 
+
  /// Trait for performing Merkle operations on a commitment scheme.
  pub trait MerkleOpsLifted<H: MerkleHasherLifted>:
 @@ -17,6 +17,84 @@ pub trait MerkleOpsLifted<H: MerkleHasherLifted>:
@@ -7460,7 +7937,7 @@ index 62692646..797e3ad5 100644
 +        positions.iter().map(|&position| leaves.at(position)).collect()
 +    }
  }
- 
+
  pub trait PackLeavesOps: ColumnOps<BaseField> {
 diff --git a/crates/stwo/src/prover/vcs_lifted/prover.rs b/crates/stwo/src/prover/vcs_lifted/prover.rs
 index f6ed054f..3e5eba23 100644
@@ -7472,7 +7949,7 @@ index f6ed054f..3e5eba23 100644
 +#[cfg(feature = "parallel")]
 +use rayon::prelude::*;
  use tracing::{Level, span};
- 
+
  use super::ops::MerkleOpsLifted;
 @@ -10,6 +12,7 @@ use crate::core::vcs_lifted::merkle_hasher::MerkleHasherLifted;
  use crate::core::vcs_lifted::verifier::{
@@ -7480,12 +7957,12 @@ index f6ed054f..3e5eba23 100644
  };
 +use crate::parallel_iter;
  use crate::prover::backend::{Col, Column};
- 
+
  /// Represents the prover side of a Merkle commitment scheme.
 @@ -48,10 +51,9 @@ impl<B: MerkleOpsLifted<H>, H: MerkleHasherLifted> MerkleProverLifted<B, H> {
              return Self { layers: vec![B::build_leaves(&[], lifting_log_size)] };
          }
- 
+
 -        let mut layers: Vec<Col<B, H::Hash>> = Vec::new();
 -        // We enter this branch only during FRI commit phase, in which we commit 4 columns of the
 -        // same size. In particular, we don't need to sort the columns by size.
@@ -7520,7 +7997,7 @@ index f6ed054f..3e5eba23 100644
 +            B::build_layers_sparse(&sorted_columns, lifting_log_size)
 +        };
          layers.reverse();
- 
+
          Self { layers }
 @@ -97,26 +94,96 @@ impl<B: MerkleOpsLifted<H>, H: MerkleHasherLifted> MerkleProverLifted<B, H> {
          &self,
@@ -7619,7 +8096,7 @@ index f6ed054f..3e5eba23 100644
 -                .collect();
 -            queried_values.push(res);
 -        }
- 
+
          let mut prev_layer_queries: Vec<usize> =
              query_positions.iter().copied().sorted().dedup().collect();
 +        // The lowest layers may not have been materialized by the commitment (see
@@ -7655,7 +8132,7 @@ index f6ed054f..3e5eba23 100644
                  }
                  let curr_index = first >> 1;
                  curr_layer_queries.push(curr_index);
- 
+
                  // Add the previous layer hashes to all_node_values.
                  all_node_values_for_layer
 -                    .insert(2 * curr_index, prev_layer_hashes.at(2 * curr_index));
@@ -7669,7 +8146,7 @@ index f6ed054f..3e5eba23 100644
 @@ -161,6 +237,43 @@ impl<B: MerkleOpsLifted<H>, H: MerkleHasherLifted> MerkleProverLifted<B, H> {
          )
      }
- 
+
 +    /// Recomputes, for every layer that the commitment left empty (see
 +    /// [`MerkleOpsLifted::build_layers_sparse`]), the hashes that the decommitment of the sorted
 +    /// and deduplicated `query_positions` reads: both children of every node on a query's path.
