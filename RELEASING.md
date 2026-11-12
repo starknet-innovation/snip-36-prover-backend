@@ -63,6 +63,14 @@ This is what
 `scripts/download-deps.sh` downloads. Cut a new one **whenever the pins
 change** — `SEQUENCER_TAG`, `PROVING_UTILS_REV`, or `STWO_NIGHTLY` — or when
 the dependency artifact layout changes.
+Cut a new bundle when the vendored prover patch changes as well, even if the
+upstream pins remain unchanged.
+
+The current source default builds the V2 virtual-OS runner with its low-memory
+patch. A new dependency release verifies that the exact supported checkout has
+that patch applied, and its release notes identify the memory mode, V2 proving
+revision and SHA-256 of `vendor/low-memory-prover/proving-v2.patch`. App releases
+continue reusing the pinned bundle; they do not rebuild it or change its mode.
 
 1. Update the pins in **both** `build-deps.yml` and `daily-health.yml`
    (and the matching consts in `crates/snip36-cli/src/commands/setup.rs`).

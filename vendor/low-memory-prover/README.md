@@ -1,10 +1,138 @@
 # Low-memory prover
 
-Patches for the older V1 prover. The current V2 sequencer uses upstream
-`privacy-prove` at `e0035ffc`; setup does not apply these patches to it.
-Porting the memory optimizations to V2 requires new patches and byte-for-byte
-proof validation against that revision; the V1 measurements below do not establish
-V2 memory usage.
+Version-specific ports of the [provably.fast frontier](https://stwo.provably.fast/).
+V1 and the current V2 stack (`privacy-prove` at `e0035ffc`) use their supported
+low-memory patch set by default when building dependencies from source:
+
+```bash
+snip36 setup
+scripts/check-low-memory-prover.sh
+```
+
+This is an unreleased source change: build the CLI from this source tree first.
+The published v1.4.1 CLI and existing `deps-v15` prebuilt bundle are unchanged.
+A new prebuilt bundle requires a separate release. `--stock-prover` restores
+upstream for either version. The lower-memory default is intentional: it trades
+some CPU work for substantially less RAM.
+
+## V2 port
+
+`proving-v2.patch` applies only to the exact `starkware-libs/proving` revision
+`e0035ffc8e08da270b8cb4a71f3708af70c2c775` pinned by sequencer `148de445`.
+Setup rejects mixed monorepo revisions and patches all of that revision's
+workspace library dependencies together, without changing the V1 verifier.
+
+The port carries the original frontier (`dd1787bc` → `77964886`) core memory
+changes to V2: striped polynomial commitments and reconstruction, pooled
+interpolation, tiled Merkle construction, and bounded-lifetime buffers. It adds
+lazy circuit preprocessing, per-proof owned Cairo preprocessing, and per-proof
+witness ownership/release. Normal RAII drops precomputes; there is no leaked
+precompute state or global witness handoff. The optional frontier global allocator
+is not installed by this V2 profile. Witness maps retain upstream hashing and
+lookup code. The decommit-plan cache compares full public inputs rather than a
+64-bit fingerprint.
+
+V2's raw Blake2s channel, OODS proof-of-work placement, query grinding, circuit
+constants, blinding, verifier, and serialization are preserved. V1's
+`Blake2sM31` channel and proof format are not substituted. Both V2 fixture proofs
+must match the **stock V2** SHA-256 values in
+[`check-v2/expected.sha256`](check-v2/expected.sha256), not the V1 golden files.
+
+### Reproduce V2 validation
+
+```bash
+# After source setup; also accepts an explicit pinned stock or patched checkout.
+scripts/check-low-memory-prover-v2.sh deps/low-memory-prover/proving-v2 2
+```
+
+This proves and verifies both public STRK20 PIE fixtures, compares their bytes
+with stock V2, and repeats each proof using shared precomputes when the second
+argument is 2. It reports `/usr/bin/time` resource data. On macOS, maximum RSS
+and peak memory footprint are distinct (compression and allocator behavior
+matter); measurements below use the reported peak footprint in decimal GB.
+
+A manual `daily-health.yml` run with `prover=source` builds the patched runner,
+checks both V2 fixture proofs, then executes the live counter and L2→L1 message
+tests. Normal daily/prebuilt runs do not exercise this source profile.
+
+### V2 measurements (2026-11-11)
+
+Same macOS arm64 host, pinned nightly, 14 Rayon threads, three alternating
+stock/profile runs per fixture (12 runs). Every proof was verified and matched
+stock V2 bytes. Medians, stock → low-memory profile:
+
+| Fixture | Cold process wall | Maximum RSS | Peak memory footprint |
+|---------|-------------------|-------------|-----------------------|
+| transfer | 8.57 → 8.61 s | 15.62 → 3.95 GB | 16.31 → 3.28 GB |
+| withdraw | 9.05 → 9.21 s | 15.75 → 3.91 GB | 16.33 → 3.28 GB |
+
+The wall measurement includes setup, one proof, verification and process cleanup.
+Lazy setup moves work into the proof phase, so comparing only the logged `prove`
+number would be misleading. CPU work (user + system) increased by roughly 16–17%.
+This was not an isolated host; these samples do not establish a latency win or
+steady-state server throughput. The repeat-with-shared-precomputes check above
+validates correctness, not concurrent proof isolation or a throughput benchmark.
+
+[Raw measurements](benchmark-v2-2026-11-11.csv) and
+[binary/toolchain/patch metadata](benchmark-v2-2026-11-11.json) are committed.
+The macOS runner is `check-v2/benchmark.py STOCK_BIN PROFILE_BIN OUTPUT_DIR`;
+build each binary using the pinned `check-v2` harness, retain the executables
+before switching variants, and run with `--repeats 3 --threads 14`.
+Linux validation is separate: it uses the source profile and stock V2 golden
+proof bytes, not these macOS timing numbers.
+
+### Linux and Sepolia validation (2026-11-11)
+
+[Source-profile run 43037496315](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43037496315)
+passed on Linux with `prover=source` and `SN_SEPOLIA`. It built the patched
+sequencer runner, verified both fixture proofs and their stock V2 hashes, then
+passed the counter and L2→L1 messages flows with gateway acceptance and inclusion:
+
+- Counter: block **17984187**, counter **0 → 1**.
+- Messages: block **17984227**, one message to `0x123` with payload `[0x1, 0x2, 0x3]`.
+- Counter virtual-OS program hash: `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`.
+
+The Linux fixture checks reported maximum RSS of 2,348,264 KiB (transfer) and
+2,353,436 KiB (withdraw). These are single profile samples, without a Linux stock
+timing/memory comparison. The run used commit `00bdcf1`; its V2 patch is identical
+to the subsequent source-default change (SHA-256
+`f660e9529bf7af772333e1093cc1fefb6e73d835d01dc87d15e31cb4942b770a`).
+Default selection, repeated setup and switching to stock and back were also
+checked locally. Mainnet, concurrent proving and CoinFlip settlement were not
+tested for this profile.
+
+Validation results, invariants, the pre-existing relation-tracker failure, and
+remaining release-review scope are recorded in [V2-REVIEW.md](V2-REVIEW.md).
+The [2026-11-12 SIMD/FFT review](SAFETY-REVIEW-V2-2026-11-12.md) includes
+memory-safety fixes and reproducible interpreter, sanitizer and CPU differential
+checks. The measurements above describe the initial port before those fixes.
+After those fixes, [source-profile Sepolia run 43178837281](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43178837281)
+passed both Linux fixture checks, counter inclusion/state at block **18020608**,
+the expected program hash, and messages inclusion/output at block **18020656**.
+The detailed review records the final patch hash and Linux Miri/ASan results.
+
+### Measurements after the safety fixes (2026-11-12)
+
+The same harness and 14-thread, three-run alternating protocol were repeated
+after the safety fixes. Every proof verifies and matches stock V2 bytes.
+These samples use `d87d83c`, before the later cache-identity-only correction;
+the binary and patch hashes below identify the measured version exactly.
+
+| Fixture | Cold process wall | Maximum RSS | Peak memory footprint |
+|---------|-------------------|-------------|-----------------------|
+| transfer | 13.45 → 10.04 s | 9.14 → 3.92 GB | 16.33 → 3.41 GB |
+| withdraw | 11.55 → 9.17 s | 12.13 → 3.98 GB | 16.27 → 3.42 GB |
+
+These samples confirm that the memory reduction remains after initialization
+and layout fixes. Host state was not isolated; stock RSS and timings differ
+from the earlier run. The observed wall/CPU differences do not establish a
+speedup or a steady-state throughput claim. RSS and memory footprint are
+different metrics and are reported separately.
+
+[Raw post-review measurements](benchmark-v2-safety-2026-11-12.csv) and
+[binary/toolchain/patch provenance](benchmark-v2-safety-2026-11-12.json).
+
+## V1 history
 
 On a supported V1 stack, `snip36 setup` applies these patches before building
 `starknet_transaction_prover`. They carry the
@@ -25,12 +153,12 @@ They change how the prover schedules and frees memory, never what it proves:
 These revisions belong to the V1 sequencers `9f78ee7c` (v1.2.2) and
 `e6b6fd2e`. Setup first identifies the actual `privacy-prove` package source,
 then checks the exact V1 patch revisions. This matters because the V2 lockfile
-also contains old V1 verifier dependencies. Known V2 uses upstream automatically;
+also contains old V1 verifier dependencies. V2 selects its separate low-memory patch set by default;
 unknown prover revisions fail with guidance to review compatibility or explicitly
 use `--stock-prover`. Setup restores the sequencer manifest before selecting a
 mode, so switching away from V1 removes any stale patch sections.
 
-## Measurements
+## V1 measurements
 
 Original PR #128 measurements on Apple M-series, `privacy_recursive_prove` on
 STRK20 privacy-pool transactions (captured Cairo PIEs), alternating runs:

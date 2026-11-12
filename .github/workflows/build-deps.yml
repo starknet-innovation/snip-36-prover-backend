@@ -142,6 +142,15 @@ jobs:
         if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: ./target/release/snip36 setup
 
+      - name: Verify patched V2 source before packaging
+        if: ${{ startsWith(needs.preflight.outputs.tag, 'deps-v') }}
+        run: |
+          set -euo pipefail
+          proving=deps/low-memory-prover/proving-v2
+          test "$(git -C "$proving" rev-parse HEAD)" = e0035ffc8e08da270b8cb4a71f3708af70c2c775
+          grep -Fxq '[patch."https://github.com/starkware-libs/proving"]' deps/sequencer/Cargo.toml
+          git -C "$proving" apply --reverse --check "$GITHUB_WORKSPACE/vendor/low-memory-prover/proving-v2.patch"
+
       - name: Package application binaries
         if: ${{ !startsWith(needs.preflight.outputs.tag, 'deps-v') }}
         run: |
@@ -313,6 +322,14 @@ jobs:
           (cd checksums && sha256sum -- *.tar.gz > SHA256SUMS)
           cat checksums/SHA256SUMS
 
+      - name: Record V2 patch checksum
+        if: ${{ startsWith(steps.tag.outputs.tag, 'deps-v') }}
+        id: v2-patch
+        run: |
+          set -euo pipefail
+          digest="$(sha256sum vendor/low-memory-prover/proving-v2.patch | awk '{print $1}')"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+
       # Both paths use softprops/action-gh-release (GitHub API, no git checkout
       # needed). A raw `gh release` CLI here fails with "not a git repository".
       - name: Release prebuilt dependencies (deps-v*)
@@ -338,7 +355,9 @@ jobs:
             - sequencer: `${{ env.SEQUENCER_TAG }}`
             - proving-utils: `${{ env.PROVING_UTILS_REV }}`
             - Rust nightly: `${{ env.STWO_NIGHTLY }}`
-            - prover memory mode: upstream V2 (vendored V1 low-memory patches are not applied)
+            - prover memory mode: patched V2 low-memory (virtual-OS runner)
+            - V2 proving: `e0035ffc8e08da270b8cb4a71f3708af70c2c775`
+            - V2 prover patch SHA256: `${{ steps.v2-patch.outputs.sha256 }}`
 
             **Usage:**
             ```bash

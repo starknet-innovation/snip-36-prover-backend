@@ -103,6 +103,12 @@ The Sierra compiler is installed under `deps/compiler-tools` and passed to the
 runner via `CARGO_TOOLS_ROOT`, so the prebuilt runner is relocatable.
 `./scripts/download-deps.sh [TAG]` does the same without a built CLI.
 
+The current source build uses the lower-memory V2 prover by default
+(`snip36 setup`); use `snip36 setup --stock-prover` to compare with upstream.
+Fixture proofs match stock V2 bytes; striped reconstruction reduces peak memory.
+The published v1.4.1 CLI and `deps-v15` bundle are unchanged; build this source
+version's CLI first to use the new default. See the [profile and reproducible checks](vendor/low-memory-prover/README.md#v2-port).
+
 **From source (~30 minutes — contributors, or platforms without prebuilt assets):**
 
 ```bash
@@ -111,7 +117,7 @@ snip36 setup
 
 This clones the sequencer and proving-utils repos, installs the nightly Rust toolchain, builds the runner and prover binaries, and creates the Python venv for `cairo-compile`.
 
-The pinned V2 runner uses the **upstream prover**. The vendored [low-memory patches](vendor/low-memory-prover/README.md) support the older V1 stack only; setup selects by the locked `privacy-prove` source and does not apply those patches to V2. The V1 measurements (~14 GB down to ~2–3 GB) do not apply to V2. `snip36 setup --stock-prover` explicitly selects upstream for source builds.
+Source setup selects the supported V1 or V2 [low-memory patch set](vendor/low-memory-prover/README.md) from the exact locked `privacy-prove` source. The V2 measurements and proof-equivalence checks are recorded separately from the older V1 results. `snip36 setup --stock-prover` explicitly selects upstream.
 
 ### 3. Configure environment
 

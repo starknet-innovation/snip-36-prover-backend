@@ -1,0 +1,58 @@
+name: Prover safety
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/low-memory-prover/proving-v2.patch'
+      - 'scripts/check-low-memory-prover-v2-safety.sh'
+      - '.github/workflows/prover-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prover-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  safety:
+    name: SIMD/FFT safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-01-15
+          components: miri, rust-src
+      - name: Cache safety targets
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            deps/low-memory-v2-safety-target
+          key: ${{ runner.os }}-v2-safety-${{ hashFiles('vendor/low-memory-prover/proving-v2.patch') }}
+          restore-keys: |
+            ${{ runner.os }}-v2-safety-
+      - name: Apply the exact V2 patch
+        run: |
+          git init deps/proving-v2-safety
+          git -C deps/proving-v2-safety remote add origin https://github.com/starkware-libs/proving.git
+          git -C deps/proving-v2-safety fetch --depth=1 origin e0035ffc8e08da270b8cb4a71f3708af70c2c775
+          git -C deps/proving-v2-safety checkout --detach FETCH_HEAD
+          git -C deps/proving-v2-safety apply "$GITHUB_WORKSPACE/vendor/low-memory-prover/proving-v2.patch"
+      - name: CPU differential, release bounds, sequential and Miri checks
+        env:
+          SNIP36_MIRI: '1'
+        run: ./scripts/check-low-memory-prover-v2-safety.sh deps/proving-v2-safety
+      - name: AddressSanitizer on FFT, reconstruction and buffer regressions
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+        run: >-
+          cargo +nightly-2026-01-15 test
+          --manifest-path deps/proving-v2-safety/Cargo.toml
+          --target-dir deps/low-memory-v2-safety-target/asan
+          --target x86_64-unknown-linux-gnu -Zbuild-std
+          -p stwo --features prover,parallel --release --lib safety_review_tests

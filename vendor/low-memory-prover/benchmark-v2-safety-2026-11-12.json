@@ -1,0 +1,15 @@
+{
+  "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+  "threads": 14,
+  "repeats": 3,
+  "binary_sha256": {
+    "stock": "01db7b806362d9987199cd24d66fb4d510294007dfbfa4dca0df60b63536c9b1",
+    "patched": "8a0bbb3d75234e2a02236b82822a2ca19bd25a54d3a28e434a11ba5b9558bb9a"
+  },
+  "date": "2026-11-12",
+  "repository_commit": "d87d83cbf3b40dc0d71e60956bf8ffe89bc2ec9d",
+  "proving_revision": "e0035ffc8e08da270b8cb4a71f3708af70c2c775",
+  "patch_sha256": "cc886bfabb5b418ef69cbb8b5f1d65f4f0f65da513e3cdae532af632774397e3",
+  "rustc": "rustc 1.94.0-nightly (86a49fd71 2026-01-14)\nbinary: rustc\ncommit-hash: 86a49fd71fecd25b0fd20247db0ba95eeceaba28\ncommit-date: 2026-01-14\nhost: aarch64-apple-darwin\nrelease: 1.94.0-nightly\nLLVM version: 21.1.8",
+  "scope": "Three alternating cold-process runs per fixture and variant on a non-isolated macOS host; each proof verified and matched stock V2 bytes. Do not infer a latency or CPU improvement from host-dependent samples."
+}

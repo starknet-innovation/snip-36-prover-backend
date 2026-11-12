@@ -11,12 +11,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="${1:-$ROOT/deps}"
+if grep -Fxq '[patch."https://github.com/starkware-libs/proving"]' "$DEPS/sequencer/Cargo.toml"; then
+  if [ ! -d "$DEPS/low-memory-prover/proving-v2" ]; then
+    echo "error: active V2 patch has no proving-v2 checkout; run snip36 setup first" >&2
+    exit 1
+  fi
+  exec "$ROOT/scripts/check-low-memory-prover-v2.sh" "$DEPS/low-memory-prover/proving-v2"
+fi
 CHECK="$ROOT/vendor/low-memory-prover/check"
 NIGHTLY="nightly-2026-01-15"
 MARKER="# snip36: low-memory prover"
 
 grep -q "$MARKER" "$DEPS/sequencer/Cargo.toml" 2>/dev/null || {
-  echo "error: $DEPS/sequencer/Cargo.toml has no low-memory prover section; this check requires a supported patched V1 build (V2 uses upstream)" >&2
+  echo "error: $DEPS/sequencer/Cargo.toml has no low-memory prover section; run snip36 setup first, or use check-low-memory-prover-v2.sh with a pinned checkout" >&2
   exit 1
 }
 

@@ -1,0 +1,10 @@
+[package]
+name = "low-memory-v2-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+privacy-prove = { path = @PRIVACY_PROVE@ }
+privacy-circuit-verify = { path = @PRIVACY_VERIFY@ }
+cairo-vm = "=3.2.0"
