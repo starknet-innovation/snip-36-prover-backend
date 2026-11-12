@@ -22,7 +22,7 @@ unsafe platform-specific code under review. V2 continues using the ordinary
 allocator. Spare-page advice now receives an exclusive slice; newly exposed
 storage is initialized after any spare-page release.
 
-The two Codex review comments were also confirmed and fixed:
+The Codex review comments were also confirmed and fixed:
 
 - Prebuilt caches now use a fresh namespace and explicit restore/save actions.
   Saving happens before source mutation, only after successful release
@@ -34,6 +34,10 @@ The two Codex review comments were also confirmed and fixed:
   `proving`/`proving-utils` URL prefix. A missing active V2 checkout fails. Five
   offline regressions cover stale directories, V1/V2 selection, commented
   headers, missing checkouts and stock mode; workspace CI runs them.
+- Future dependency releases identify the patched V2 runner, exact proving
+  revision and patch SHA-256. Packaging checks the active patch header, source
+  revision and patch application before publishing. The obsolete "upstream V2"
+  description was removed; existing bundles are not republished.
 
 Rust's [`Vec::set_len` safety contract](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.set_len)
 requires initialized elements, and allocation ownership must retain its original
