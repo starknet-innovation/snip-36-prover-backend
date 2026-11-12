@@ -124,10 +124,27 @@ example. Workspace build, 44 unit tests, Clippy and formatting also pass.
 The circuit suites (22 + 73 tests) and production-feature Cairo suite (24 tests)
 were rerun during remediation and pass as well.
 
-Linux native, Miri and AddressSanitizer checks pass at `d87d83c` in
-[run 43177466573](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43177466573).
-The complete-coset cache-key follow-up and post-fix live Sepolia validation are
-tracked separately; final run results are added once complete.
+Linux checks including the complete-coset cache-key follow-up pass at `05c568e`
+in [run 43179212983](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43179212983):
+292 parallel / 290 sequential STWO tests, 16 framework tests, the compile-fail
+doctest, example compilation, five Miri regressions and 15 AddressSanitizer
+regressions. All PR CI and the latest automated Codex review passed at that head.
+
+[Source-profile Sepolia run 43178837281](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43178837281)
+passed at `17e5326` on `SN_SEPOLIA`; the subsequent release-provenance commit
+does not change the prover patch (SHA-256
+`88132044b4a11cd3369d193d568eaf97d80cd9556b81e1c9445a6fa0d32359d4`).
+The run built the patched runner, verified both fixture proofs and stock V2
+hashes, then verified gateway acceptance and inclusion for:
+
+- Counter: block **18020608**, state **0 → 1**.
+- Messages: block **18020656**, one raw message to `0x123`, payload `[0x1, 0x2, 0x3]`.
+- Counter virtual-OS program hash: `0x1c7be3225dfb33359b3ba9ffbe1542b7da27879b6d89f47b967e512463fd324`.
+
+Linux fixture maximum RSS was 2,540,624 KiB (transfer) and 2,656,344 KiB
+(withdraw), each a single sample without a Linux stock comparison. Mainnet,
+arbitrary concurrent proving and CoinFlip settlement were not tested.
+
 The pinned AddressSanitizer runtime on this macOS host deadlocks in its own
 shadow-memory initialization before the test harness starts, so no local ASan
 pass is claimed. Linux CI runs the instrumented tests instead. The known

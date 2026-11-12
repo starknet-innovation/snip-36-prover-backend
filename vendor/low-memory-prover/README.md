@@ -106,6 +106,10 @@ remaining release-review scope are recorded in [V2-REVIEW.md](V2-REVIEW.md).
 The [2026-11-12 SIMD/FFT review](SAFETY-REVIEW-V2-2026-11-12.md) includes
 memory-safety fixes and reproducible interpreter, sanitizer and CPU differential
 checks. The measurements above describe the initial port before those fixes.
+After those fixes, [source-profile Sepolia run 43178837281](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43178837281)
+passed both Linux fixture checks, counter inclusion/state at block **18020608**,
+the expected program hash, and messages inclusion/output at block **18020656**.
+The detailed review records the final patch hash and Linux Miri/ASan results.
 
 ### Measurements after the safety fixes (2026-11-12)
 

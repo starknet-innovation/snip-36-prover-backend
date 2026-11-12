@@ -14,9 +14,10 @@ coverage. It is an agent-led review, not a separate third-party audit.
 ## Validation scope
 
 - Workspace: 44 unit tests, build, Clippy with warnings denied, formatting.
-- Pinned V2 stack: 277 STWO tests, 14 constraint-framework tests, 22 circuit-prover tests, 73 circuit tests, and 24 Cairo prover tests with `nightly` enabled and the production relation-tracker feature disabled.
+- Pinned V2 stack after review: 290 parallel / 288 sequential STWO tests on macOS, 292 / 290 on Linux, 16 constraint-framework tests, 22 circuit-prover tests, 73 circuit tests, and 24 Cairo prover tests with `nightly` enabled and the production relation-tracker feature disabled. Five Miri and 15 Linux AddressSanitizer regressions pass.
 - Both public transfer/withdraw PIEs prove, verify, and match stock V2 bytes. Two consecutive proofs per fixture with shared precomputes also match.
 - Linux source build, both fixture verifications/golden hashes, and live Sepolia counter and L2→L1 message acceptance/inclusion pass in [run 43037496315](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43037496315). See the README for provenance, inclusion blocks and exclusions.
+- The safety-fixed patch passed the complete source-profile rerun on 2026-11-12: [run 43178837281](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43178837281). The detailed review records its source hash, inclusion blocks and final Linux safety workflow.
 - Patch applies to and reverses from the exact upstream pin. The V2 source default is low-memory; explicit stock mode remains available.
 
 The Cairo prover's all-features Pedersen test panics in the upstream relation tracker (`relation_tracker.rs:97`, length 2/index 2). The same exact test fails on unmodified e0035ffc. This is a pre-existing debug-feature failure, not a green all-features claim. The port also adapts that debug consumer to reconstruct striped/coefficients-only columns instead of treating their buffers as full-domain evaluations.
