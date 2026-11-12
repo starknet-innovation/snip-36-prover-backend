@@ -14,6 +14,7 @@ audit. The remediations are part of this PR; the V1 patch set is unchanged.
 | `into_cpu_vec` transfers a 64-byte-aligned SIMD allocation to a scalar vector which deallocates with alignment 4. | Inherited upstream, P1 | Copy into a correctly allocated scalar vector; drop the packed allocation with its original layout. |
 | `Vectorized<A, N>: Zeroable` only requires `A: Copy`; `NonZeroU32` is a counterexample. Allocation through the safe `bytemuck` API can therefore construct invalid values. | Inherited upstream, P1 | Require `A: Zeroable` and add a compile-fail regression. |
 | Pooled interpolation and FFT wrappers trust logical size labels before raw-pointer writes. Pool insertion only checks size in debug builds; incomplete twiddle layers can reach unchecked reads. | New/reused raw-kernel boundaries, P1 | Check physical storage and destination sizes, enforce pool sizes in release mode, and validate the complete twiddle-layer shape before unchecked kernel access. |
+| Cached twiddles omit the coset step from their key. A conjugated coset and a forward coset constructed with its starting index have the same old key but require different twiddle trees. | Introduced cache, P2 | Key both twiddle and prefix-plan caches by the full coset identity, including all point/index fields. A regression warms both traversals and compares the cached tree with direct precomputation. |
 | Block FFT code uses unconditional Rayon iterators although `parallel` is optional. | Introduced by the port, P2 | Use the feature-aware iterator abstraction and test the sequential build. |
 
 The V2-only, unused custom allocator implementation was removed to reduce the
@@ -51,6 +52,11 @@ An isolated checkout with the original PR patch reproduced these Miri failures:
   64 versus deallocation alignment 4.
 - Read a `bytemuck::allocation::zeroed_vec::<Vectorized<NonZeroU32, 1>>(1)`:
   Miri reports an invalid zero-valued `NonZeroU32`.
+
+A native regression also failed on the original patch: warming twiddles with
+`half_coset.conjugate()` then requesting `Coset::new(conjugate.initial_index,
+conjugate.log_size)` returned the wrong root coset. The corrected cache test
+passes for both traversal orders.
 
 The patched source has permanent regressions for fresh/partial growth, scalar
 conversion, actual very-packed slice lengths, bad pool labels, forged physical
@@ -107,15 +113,25 @@ This does not depend on the published, unpatched `deps-v15` bundle.
 
 ## Validation status
 
-Local checks pass: 289 optimized STWO tests with Rayon, 287 without it, 16
+Local checks pass: 290 optimized STWO tests with Rayon, 288 without it, 16
 framework tests (including large blocked constraints), five Miri buffer/view
 tests, the `Zeroable` compile-fail doctest and compilation of the migrated
 example. Workspace build, 44 unit tests, Clippy and formatting also pass.
+The circuit suites (22 + 73 tests) and production-feature Cairo suite (24 tests)
+were rerun during remediation and pass as well.
 
-Linux sanitizer and post-fix live Sepolia validation are tracked separately
-from the original 2026-11-11 run; results are added here once those runs complete.
+Linux native, Miri and AddressSanitizer checks pass at `d87d83c` in
+[run 43177466573](https://github.com/starknet-innovation/snip-36-prover-backend/actions/runs/43177466573).
+The complete-coset cache-key follow-up and post-fix live Sepolia validation are
+tracked separately; final run results are added once complete.
 The pinned AddressSanitizer runtime on this macOS host deadlocks in its own
 shadow-memory initialization before the test harness starts, so no local ASan
 pass is claimed. Linux CI runs the instrumented tests instead. The known
 upstream all-features Pedersen relation-tracker failure remains documented in
 `V2-REVIEW.md`.
+
+The [post-memory-fix benchmark](benchmark-v2-safety-2026-11-12.csv) at `d87d83c`
+retains about 3.9–4.0 GB peak RSS and 3.4 GB footprint on the two fixtures. Its
+binary and patch hashes are recorded separately; the subsequent cache-key-only
+change is not included in those timing samples. See the README for host-state
+limitations and both metrics.

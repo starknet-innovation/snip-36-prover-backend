@@ -105,7 +105,7 @@ runner via `CARGO_TOOLS_ROOT`, so the prebuilt runner is relocatable.
 
 The current source build uses the lower-memory V2 prover by default
 (`snip36 setup`); use `snip36 setup --stock-prover` to compare with upstream.
-It preserves stock V2 proof bytes and uses more CPU for lower peak memory.
+Fixture proofs match stock V2 bytes; striped reconstruction reduces peak memory.
 The published v1.4.1 CLI and `deps-v15` bundle are unchanged; build this source
 version's CLI first to use the new default. See the [profile and reproducible checks](vendor/low-memory-prover/README.md#v2-port).
 

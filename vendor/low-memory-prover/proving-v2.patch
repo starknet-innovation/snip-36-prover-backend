@@ -2844,7 +2844,7 @@ index fef756f8..eca92402 100644
          // Transpose the tail. If `tail_rows > 0` then necessarily we haven't entered the previous
          // loop.
 diff --git a/crates/stwo/src/prover/backend/simd/circle.rs b/crates/stwo/src/prover/backend/simd/circle.rs
-index 228c1cf6..bce3806f 100644
+index 228c1cf6..7893195c 100644
 --- a/crates/stwo/src/prover/backend/simd/circle.rs
 +++ b/crates/stwo/src/prover/backend/simd/circle.rs
 @@ -22,13 +22,15 @@ use crate::core::fields::{Field, FieldExpOps, batch_inverse};
@@ -3413,7 +3413,7 @@ index 228c1cf6..bce3806f 100644
 
 -        CircleEvaluation::new(domain, buffer)
 +    fn subdomain_twiddles(coset: Coset) -> std::sync::Arc<TwiddleTree<Self>> {
-+        let key = (coset.initial_index.0, coset.log_size);
++        let key = CosetCacheKey::from(coset);
 +        if let Some(twiddles) = SUBDOMAIN_TWIDDLES.lock().unwrap().get(&key) {
 +            return twiddles.clone();
 +        }
@@ -3544,7 +3544,7 @@ index 228c1cf6..bce3806f 100644
  fn compute_small_coset_twiddles(coset: Coset) -> TwiddleTree<SimdBackend> {
      let twiddles = slow_precompute_twiddles(coset);
 
-@@ -601,6 +1128,273 @@ fn slow_eval_at_point(
+@@ -601,6 +1128,297 @@ fn slow_eval_at_point(
      fold(poly.coeffs.as_slice(), &mappings)
  }
 
@@ -3683,13 +3683,37 @@ index 228c1cf6..bce3806f 100644
 +/// The column-independent part of [`evaluate_from_prefix_simd`] for one column size and set of
 +/// rows: the subdomain's inverse twiddles and, per block, the shared factor times the twiddle of
 +/// every pair of every folded layer, and each point's own five factors.
++// Coset fields are public and conjugation reverses its step. Key the complete
++// identity, including redundant point/index fields, rather than assuming that a
++// starting index and size uniquely determine the traversal.
++#[derive(Clone, Copy, PartialEq, Eq, Hash)]
++struct CosetCacheKey {
++    initial_index: usize,
++    initial: CirclePoint<BaseField>,
++    step_size: usize,
++    step: CirclePoint<BaseField>,
++    log_size: u32,
++}
++
++impl From<Coset> for CosetCacheKey {
++    fn from(coset: Coset) -> Self {
++        Self {
++            initial_index: coset.initial_index.0,
++            initial: coset.initial,
++            step_size: coset.step_size.0,
++            step: coset.step,
++            log_size: coset.log_size,
++        }
++    }
++}
++
 +type SubdomainTwiddles =
-+    std::collections::HashMap<(usize, u32), std::sync::Arc<TwiddleTree<SimdBackend>>>;
++    std::collections::HashMap<CosetCacheKey, std::sync::Arc<TwiddleTree<SimdBackend>>>;
 +/// The twiddles of the subdomains striped trees regrow or decommit on.
 +static SUBDOMAIN_TWIDDLES: std::sync::LazyLock<std::sync::Mutex<SubdomainTwiddles>> =
 +    std::sync::LazyLock::new(Default::default);
 +// Equality compares the complete public plan input, not just a 64-bit fingerprint.
-+type PrefixPlanKey = (u32, u32, usize, Vec<(usize, Vec<usize>)>);
++type PrefixPlanKey = (u32, CosetCacheKey, Vec<(usize, Vec<usize>)>);
 +/// The decommit plans of [`PrefixPlan::get`], by column size, domain and rows.
 +static PREFIX_PLANS: std::sync::LazyLock<
 +    std::sync::Mutex<std::collections::HashMap<PrefixPlanKey, std::sync::Arc<PrefixPlan>>>,
@@ -3751,7 +3775,7 @@ index 228c1cf6..bce3806f 100644
 +    }
 +
 +    fn get(n: u32, domain: CircleDomain, targets: &[(usize, Vec<usize>)]) -> std::sync::Arc<Self> {
-+        let key = (n, domain.log_size(), domain.half_coset.initial_index.0, targets.to_vec());
++        let key = (n, CosetCacheKey::from(domain.half_coset), targets.to_vec());
 +        if let Some(plan) = PREFIX_PLANS.lock().unwrap().get(&key) {
 +            return plan.clone();
 +        }
@@ -3818,7 +3842,7 @@ index 228c1cf6..bce3806f 100644
  #[cfg(test)]
  mod tests {
      use itertools::Itertools;
-@@ -885,3 +1679,235 @@ mod tests {
+@@ -885,3 +1703,251 @@ mod tests {
          }
      }
  }
@@ -3826,6 +3850,22 @@ index 228c1cf6..bce3806f 100644
 +#[cfg(test)]
 +mod safety_review_tests {
 +    use super::*;
++
++    #[test]
++    fn cached_twiddles_preserve_complete_coset_identity() {
++        clear_stripe_caches();
++        let conjugate = CanonicCoset::new(10).half_coset().conjugate();
++        let forward = Coset::new(conjugate.initial_index, conjugate.log_size);
++        assert_ne!(conjugate, forward);
++        for coset in [conjugate, forward, conjugate, forward] {
++            let cached = SimdBackend::subdomain_twiddles(coset);
++            let reference = SimdBackend::precompute_twiddles(coset);
++            assert_eq!(cached.root_coset, coset);
++            assert_eq!(cached.twiddles, reference.twiddles);
++            assert_eq!(cached.itwiddles, reference.itwiddles);
++        }
++        clear_stripe_caches();
++    }
 +
 +    fn values(log_size: u32, pattern: usize) -> Vec<BaseField> {
 +        let mut seed = 0x9e3779b97f4a7c15u64;

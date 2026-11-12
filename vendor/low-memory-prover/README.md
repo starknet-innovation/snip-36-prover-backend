@@ -107,6 +107,27 @@ The [2026-11-12 SIMD/FFT review](SAFETY-REVIEW-V2-2026-11-12.md) includes
 memory-safety fixes and reproducible interpreter, sanitizer and CPU differential
 checks. The measurements above describe the initial port before those fixes.
 
+### Measurements after the safety fixes (2026-11-12)
+
+The same harness and 14-thread, three-run alternating protocol were repeated
+after the safety fixes. Every proof verifies and matches stock V2 bytes.
+These samples use `d87d83c`, before the later cache-identity-only correction;
+the binary and patch hashes below identify the measured version exactly.
+
+| Fixture | Cold process wall | Maximum RSS | Peak memory footprint |
+|---------|-------------------|-------------|-----------------------|
+| transfer | 13.45 → 10.04 s | 9.14 → 3.92 GB | 16.33 → 3.41 GB |
+| withdraw | 11.55 → 9.17 s | 12.13 → 3.98 GB | 16.27 → 3.42 GB |
+
+These samples confirm that the memory reduction remains after initialization
+and layout fixes. Host state was not isolated; stock RSS and timings differ
+from the earlier run. The observed wall/CPU differences do not establish a
+speedup or a steady-state throughput claim. RSS and memory footprint are
+different metrics and are reported separately.
+
+[Raw post-review measurements](benchmark-v2-safety-2026-11-12.csv) and
+[binary/toolchain/patch provenance](benchmark-v2-safety-2026-11-12.json).
+
 ## V1 history
 
 On a supported V1 stack, `snip36 setup` applies these patches before building
