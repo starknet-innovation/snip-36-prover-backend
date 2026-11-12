@@ -9,11 +9,11 @@ snip36 setup
 scripts/check-low-memory-prover.sh
 ```
 
-This is an unreleased source change: build the CLI from this source tree first.
-The published v1.4.1 CLI and existing `deps-v15` prebuilt bundle are unchanged.
-A new prebuilt bundle requires a separate release. `--stock-prover` restores
-upstream for either version. The lower-memory default is intentional: it trades
-some CPU work for substantially less RAM.
+The v1.4.2 CLI pins the `deps-v16` prebuilt bundle with the reviewed V2
+low-memory runner. The older v1.4.1 / `deps-v15` artifacts retain their upstream
+V2 runner. For source builds, `--stock-prover` restores upstream for either
+version. The lower-memory default prioritizes RAM and performs extra
+reconstruction work.
 
 ## V2 port
 

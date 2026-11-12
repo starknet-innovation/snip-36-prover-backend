@@ -59,6 +59,16 @@ older image tags from before that switch may be amd64-only.
 > `curl` / `download-deps.sh`) carry the Gatekeeper quarantine attribute.
 > Clear it with `xattr -dr com.apple.quarantine <path>`.
 
+## v1.4.2 low-memory V2 release
+
+[v1.4.2](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/v1.4.2)
+pins [deps-v16](https://github.com/starknet-innovation/snip-36-prover-backend/releases/tag/deps-v16),
+including the SIMD/FFT safety fixes from [PR #153](https://github.com/starknet-innovation/snip-36-prover-backend/pull/153).
+The [review report](vendor/low-memory-prover/SAFETY-REVIEW-V2-2026-11-12.md)
+records proof-byte equivalence, memory measurements and source-profile Sepolia
+validation. Those source tests are distinct from testing the exact published
+release artifacts on-chain.
+
 ## v1.4.1 live network validation
 
 On 2026-11-10, the published `v1.4.1` Linux x86-64 CLI, with `deps-v15`, passed the counter (`snip36 e2e`) and L2→L1 messages (`snip36 e2e-messages`) tests on both networks. The downloaded CLI archive checksum was verified, and the binary used in both runs matched the published release binary byte-for-byte.
@@ -103,11 +113,10 @@ The Sierra compiler is installed under `deps/compiler-tools` and passed to the
 runner via `CARGO_TOOLS_ROOT`, so the prebuilt runner is relocatable.
 `./scripts/download-deps.sh [TAG]` does the same without a built CLI.
 
-The current source build uses the lower-memory V2 prover by default
-(`snip36 setup`); use `snip36 setup --stock-prover` to compare with upstream.
-Fixture proofs match stock V2 bytes; striped reconstruction reduces peak memory.
-The published v1.4.1 CLI and `deps-v15` bundle are unchanged; build this source
-version's CLI first to use the new default. See the [profile and reproducible checks](vendor/low-memory-prover/README.md#v2-port).
+The v1.4.2 CLI pins `deps-v16`, which includes the reviewed lower-memory V2
+virtual-OS runner. Source builds also select this profile by default
+(`snip36 setup`); use `snip36 setup --stock-prover` to build upstream instead.
+Fixture proofs match stock V2 bytes; striped reconstruction reduces peak memory. See the [profile and reproducible checks](vendor/low-memory-prover/README.md#v2-port).
 
 **From source (~30 minutes — contributors, or platforms without prebuilt assets):**
 
