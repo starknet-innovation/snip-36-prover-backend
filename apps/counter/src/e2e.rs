@@ -242,53 +242,80 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // ==========================================
     step(2, "Declare contract class");
 
-    let declare_output = run_sncast_with_retries("sncast declare Counter", || {
-        let mut cmd = tokio::process::Command::new("sncast");
-        cmd.args([
-            "--account",
-            &account_name,
-            "declare",
-            "--url",
-            &config.rpc_url,
-            "--contract-name",
-            "Counter",
-        ])
-        .args(&sncast_args)
-        .current_dir(&contracts_dir);
-        cmd
-    })
-    .await
-    .wrap_err("failed to run sncast declare")?;
+    // Skip the declare when the class is already on-chain. Re-declaring relies on
+    // the node answering "already declared", which it no longer does once a
+    // network-side check (e.g. Sierra version gating) fires first.
+    let class_hash_output = tokio::process::Command::new("sncast")
+        .args(["utils", "class-hash", "--contract-name", "Counter"])
+        .current_dir(&contracts_dir)
+        .output()
+        .await
+        .wrap_err("failed to compute class hash")?;
 
-    let declare_combined = format_cmd_output_with_status(&declare_output);
-    info!("  sncast declare output:");
-    info!("  {declare_combined}");
+    let class_hash_text = format_cmd_output(&class_hash_output);
+    let computed_hash = parse_hex_from_output("class_hash", &class_hash_text)
+        .or_else(|| parse_long_hex(&class_hash_text));
 
-    let class_hash = parse_hex_from_output("class_hash", &declare_combined)
-        .or_else(|| parse_long_hex(&declare_combined));
+    let already_declared = match computed_hash {
+        Some(ref ch) => rpc.get_class(ch).await.is_ok(),
+        None => false,
+    };
 
-    let declare_tx_hash = parse_hex_from_output("transaction_hash", &declare_combined);
+    let class_hash = if already_declared {
+        let h = computed_hash.unwrap();
+        pass("Counter already declared");
+        info!("  Class hash: {h}");
+        h
+    } else {
+        let declare_output = run_sncast_with_retries("sncast declare Counter", || {
+            let mut cmd = tokio::process::Command::new("sncast");
+            cmd.args([
+                "--account",
+                &account_name,
+                "declare",
+                "--url",
+                &config.rpc_url,
+                "--contract-name",
+                "Counter",
+            ])
+            .args(&sncast_args)
+            .current_dir(&contracts_dir);
+            cmd
+        })
+        .await
+        .wrap_err("failed to run sncast declare")?;
 
-    let class_hash = match class_hash {
-        Some(h) => {
-            pass("Contract declared");
-            info!("  Class hash: {h}");
-            // Wait for declare tx to land before deploying
-            if let Some(tx) = &declare_tx_hash {
-                info!("  Waiting for declare tx inclusion...");
-                rpc.wait_for_tx(tx, 120, 3)
-                    .await
-                    .wrap_err("declare tx not confirmed")?;
+        let declare_combined = format_cmd_output_with_status(&declare_output);
+        info!("  sncast declare output:");
+        info!("  {declare_combined}");
+
+        let class_hash = parse_hex_from_output("class_hash", &declare_combined)
+            .or_else(|| parse_long_hex(&declare_combined));
+
+        let declare_tx_hash = parse_hex_from_output("transaction_hash", &declare_combined);
+
+        match class_hash {
+            Some(h) => {
+                pass("Contract declared");
+                info!("  Class hash: {h}");
+                // Wait for declare tx to land before deploying
+                if let Some(tx) = &declare_tx_hash {
+                    info!("  Waiting for declare tx inclusion...");
+                    rpc.wait_for_tx(tx, 120, 3)
+                        .await
+                        .wrap_err("declare tx not confirmed")?;
+                }
+                h
             }
-            h
-        }
-        None => {
-            let kind = classify_sncast_failure(declare_output.status.success(), &declare_combined);
-            fail(&format!(
-                "Could not determine class hash ({})",
-                kind.label()
-            ));
-            bail!("declare failed: {}", kind.label());
+            None => {
+                let kind =
+                    classify_sncast_failure(declare_output.status.success(), &declare_combined);
+                fail(&format!(
+                    "Could not determine class hash ({})",
+                    kind.label()
+                ));
+                bail!("declare failed: {}", kind.label());
+            }
         }
     };
 
