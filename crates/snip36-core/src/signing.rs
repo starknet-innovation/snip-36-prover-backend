@@ -300,6 +300,46 @@ mod tests {
     }
 
     #[test]
+    fn test_tx_hash_depends_on_virtual_l2_gas() {
+        let sender = Felt::from_hex("0x123").unwrap();
+        let calldata = vec![Felt::ONE];
+        let chain_id = chain_id_felt("SN_SEPOLIA");
+        let hash = |bounds: &ResourceBounds| {
+            compute_invoke_v3_tx_hash(
+                sender,
+                &calldata,
+                chain_id,
+                Felt::ZERO,
+                Felt::ZERO,
+                bounds,
+                &[],
+                &[],
+                0,
+                0,
+                &[],
+            )
+        };
+
+        let default_hash = hash(&ResourceBounds::zero_fee());
+        // Passing the default explicitly must not change the hash.
+        assert_eq!(
+            default_hash,
+            hash(&ResourceBounds::zero_fee_with_l2_gas(0x7000000).unwrap())
+        );
+        // Pinned so the default virtual-tx hash cannot drift silently.
+        assert_eq!(
+            default_hash,
+            Felt::from_hex("0x6c6aa51a1bf52429fc0de61044d9fced685b190070b699c1d0babe286eef934")
+                .unwrap()
+        );
+        // A different L2 gas budget is a different signed transaction.
+        assert_ne!(
+            default_hash,
+            hash(&ResourceBounds::zero_fee_with_l2_gas(1_110_000_000).unwrap())
+        );
+    }
+
+    #[test]
     fn test_tx_hash_with_proof_facts_differs() {
         let sender = Felt::from_hex("0x123").unwrap();
         let calldata = vec![Felt::ONE];

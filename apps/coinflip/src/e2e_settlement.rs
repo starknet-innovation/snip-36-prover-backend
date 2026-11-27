@@ -89,11 +89,18 @@ pub struct E2eSettlementArgs {
     /// Bet amount in STRK (e.g. 0.001)
     #[arg(long, default_value = "0.001")]
     pub bet_amount: crate::input::StrkAmount,
+
+    /// `l2_gas.max_amount` of the virtual transaction, decimal or 0x hex
+    /// (default 0x7000000, max 1110000000; env: SNIP36_VIRTUAL_L2_GAS)
+    #[arg(long, value_parser = snip36_core::types::parse_virtual_l2_gas)]
+    pub virtual_l2_gas: Option<u64>,
 }
 
 pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) -> Result<()> {
     let bet = crate::input::validate_bet(args.bet).map_err(|e| eyre::eyre!(e))?;
     let config = Config::from_env(env_file)?;
+    // Resolved up front so an invalid override fails before any on-chain step.
+    let virtual_bounds = ResourceBounds::zero_fee_from_env(args.virtual_l2_gas)?;
     let gateway_submit_url = if args.prove_only {
         None
     } else {
@@ -363,7 +370,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
     let nonce = rpc.get_nonce(&config.account_address).await?;
     let nonce_felt = Felt::from(nonce);
 
-    let zero_bounds = ResourceBounds::zero_fee();
+    let zero_bounds = virtual_bounds.clone();
     let standard_tx_hash = compute_invoke_v3_tx_hash(
         sender_felt,
         &calldata_felts,

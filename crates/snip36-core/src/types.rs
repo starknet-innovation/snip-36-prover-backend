@@ -12,6 +12,71 @@ pub fn canonical_felt_hex(value: &str) -> Result<String, String> {
     Ok(format!("{felt:#x}"))
 }
 
+/// Default `l2_gas.max_amount` of the virtual (zero-fee) transaction.
+pub const DEFAULT_VIRTUAL_L2_GAS: u64 = 0x7000000;
+
+/// Largest useful `l2_gas.max_amount` for the virtual transaction.
+///
+/// The virtual OS starts the transaction with `l2_gas.max_amount` Sierra gas
+/// and caps each entry point with the Starknet versioned constants:
+/// `execute_max_sierra_gas` (1,110,000,000) for `__execute__` and
+/// `validate_max_sierra_gas` (100,000,000) for `__validate__`
+/// (Starknet 0.14.3 / 0.14.4). Anything above the execute cap buys nothing.
+pub const MAX_VIRTUAL_L2_GAS: u64 = 1_110_000_000;
+
+/// Environment variable overriding the virtual transaction's `l2_gas.max_amount`.
+pub const VIRTUAL_L2_GAS_ENV: &str = "SNIP36_VIRTUAL_L2_GAS";
+
+/// Invalid L2 gas budget for the virtual transaction.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum VirtualL2GasError {
+    #[error("invalid virtual L2 gas amount '{0}': expected a decimal or 0x-prefixed hex integer")]
+    Invalid(String),
+    #[error(
+        "virtual L2 gas amount {0} exceeds the protocol execute cap of {MAX_VIRTUAL_L2_GAS} \
+         (execute_max_sierra_gas)"
+    )]
+    AboveCap(u64),
+}
+
+/// Parse and validate a virtual-transaction L2 gas amount (decimal or `0x` hex).
+pub fn parse_virtual_l2_gas(value: &str) -> Result<u64, VirtualL2GasError> {
+    let trimmed = value.trim();
+    let parsed = match trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => trimmed.parse::<u64>(),
+    };
+    let amount = parsed.map_err(|_| VirtualL2GasError::Invalid(value.to_string()))?;
+    check_virtual_l2_gas(amount)
+}
+
+fn check_virtual_l2_gas(amount: u64) -> Result<u64, VirtualL2GasError> {
+    if amount > MAX_VIRTUAL_L2_GAS {
+        return Err(VirtualL2GasError::AboveCap(amount));
+    }
+    Ok(amount)
+}
+
+/// Resolve the virtual transaction's L2 gas budget: explicit value (CLI flag),
+/// else the environment value, else [`DEFAULT_VIRTUAL_L2_GAS`].
+///
+/// An empty environment value counts as unset.
+pub fn resolve_virtual_l2_gas(
+    explicit: Option<u64>,
+    env_value: Option<&str>,
+) -> Result<u64, VirtualL2GasError> {
+    if let Some(amount) = explicit {
+        return check_virtual_l2_gas(amount);
+    }
+    match env_value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(value) => parse_virtual_l2_gas(value),
+        None => Ok(DEFAULT_VIRTUAL_L2_GAS),
+    }
+}
+
 /// Resource bounds for a single gas type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceBound {
@@ -47,14 +112,37 @@ impl ResourceBounds {
     }
 
     /// Resource bounds for virtual OS proving: enough gas for execution, zero price (no fee).
+    ///
+    /// Uses [`DEFAULT_VIRTUAL_L2_GAS`]; see [`Self::zero_fee_with_l2_gas`] to raise it.
     pub fn zero_fee() -> Self {
+        Self::zero_fee_unchecked(DEFAULT_VIRTUAL_L2_GAS)
+    }
+
+    /// Zero-fee bounds for the virtual transaction with a custom `l2_gas.max_amount`.
+    ///
+    /// Rejects amounts above [`MAX_VIRTUAL_L2_GAS`] instead of clamping them:
+    /// the bounds are part of the signed transaction hash.
+    pub fn zero_fee_with_l2_gas(l2_gas_amount: u64) -> Result<Self, VirtualL2GasError> {
+        Ok(Self::zero_fee_unchecked(check_virtual_l2_gas(
+            l2_gas_amount,
+        )?))
+    }
+
+    /// Zero-fee bounds for the virtual transaction, with the L2 gas budget taken
+    /// from `explicit` (CLI flag), else `SNIP36_VIRTUAL_L2_GAS`, else the default.
+    pub fn zero_fee_from_env(explicit: Option<u64>) -> Result<Self, VirtualL2GasError> {
+        let env_value = std::env::var(VIRTUAL_L2_GAS_ENV).ok();
+        Self::zero_fee_with_l2_gas(resolve_virtual_l2_gas(explicit, env_value.as_deref())?)
+    }
+
+    fn zero_fee_unchecked(l2_gas_amount: u64) -> Self {
         Self {
             l1_gas: ResourceBound {
                 max_amount: 0,
                 max_price_per_unit: 0,
             },
             l2_gas: ResourceBound {
-                max_amount: 0x7000000,
+                max_amount: l2_gas_amount,
                 max_price_per_unit: 0,
             },
             l1_data_gas: ResourceBound {
@@ -175,6 +263,90 @@ mod tests {
     }
 
     #[test]
+    fn zero_fee_default_l2_gas_is_unchanged() {
+        let b = ResourceBounds::zero_fee();
+        assert_eq!(DEFAULT_VIRTUAL_L2_GAS, 117_440_512);
+        assert_eq!(b.l2_gas.max_amount, 0x7000000);
+        assert_eq!(b.l2_gas.max_price_per_unit, 0);
+        assert_eq!(b.l1_gas.max_amount, 0);
+        assert_eq!(b.l1_data_gas.max_amount, 0x1b0);
+        // No override anywhere resolves to the same bounds.
+        let resolved = resolve_virtual_l2_gas(None, None).unwrap();
+        assert_eq!(
+            ResourceBounds::zero_fee_with_l2_gas(resolved)
+                .unwrap()
+                .to_rpc_json(),
+            b.to_rpc_json()
+        );
+    }
+
+    #[test]
+    fn zero_fee_with_l2_gas_applies_override_only_to_l2_amount() {
+        let b = ResourceBounds::zero_fee_with_l2_gas(MAX_VIRTUAL_L2_GAS).unwrap();
+        let v = b.to_rpc_json();
+        assert_eq!(v["l2_gas"]["max_amount"], "0x42294180");
+        assert_eq!(v["l2_gas"]["max_price_per_unit"], "0x0");
+        assert_eq!(
+            v["l1_gas"],
+            ResourceBounds::zero_fee().to_rpc_json()["l1_gas"]
+        );
+        assert_eq!(
+            v["l1_data_gas"],
+            ResourceBounds::zero_fee().to_rpc_json()["l1_data_gas"]
+        );
+    }
+
+    #[test]
+    fn virtual_l2_gas_above_execute_cap_is_rejected() {
+        assert_eq!(
+            ResourceBounds::zero_fee_with_l2_gas(MAX_VIRTUAL_L2_GAS + 1).unwrap_err(),
+            VirtualL2GasError::AboveCap(MAX_VIRTUAL_L2_GAS + 1)
+        );
+        assert!(parse_virtual_l2_gas("0x42294181").is_err());
+        assert!(resolve_virtual_l2_gas(Some(u64::MAX), None).is_err());
+        assert!(resolve_virtual_l2_gas(None, Some("2000000000")).is_err());
+        let msg = VirtualL2GasError::AboveCap(MAX_VIRTUAL_L2_GAS + 1).to_string();
+        assert!(
+            msg.contains("1110000001") && msg.contains("1110000000"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn virtual_l2_gas_parses_decimal_and_hex() {
+        assert_eq!(parse_virtual_l2_gas("1110000000"), Ok(MAX_VIRTUAL_L2_GAS));
+        assert_eq!(parse_virtual_l2_gas("0x42294180"), Ok(MAX_VIRTUAL_L2_GAS));
+        assert_eq!(
+            parse_virtual_l2_gas(" 0X7000000 "),
+            Ok(DEFAULT_VIRTUAL_L2_GAS)
+        );
+        for bad in ["", "abc", "-1", "0x", "1e9"] {
+            assert!(
+                matches!(
+                    parse_virtual_l2_gas(bad),
+                    Err(VirtualL2GasError::Invalid(_))
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_l2_gas_resolution_prefers_explicit_then_env_then_default() {
+        assert_eq!(resolve_virtual_l2_gas(Some(5), Some("7")), Ok(5));
+        assert_eq!(resolve_virtual_l2_gas(None, Some("0x7")), Ok(7));
+        assert_eq!(
+            resolve_virtual_l2_gas(None, Some("  ")),
+            Ok(DEFAULT_VIRTUAL_L2_GAS)
+        );
+        assert_eq!(
+            resolve_virtual_l2_gas(None, None),
+            Ok(DEFAULT_VIRTUAL_L2_GAS)
+        );
+        assert!(resolve_virtual_l2_gas(None, Some("nope")).is_err());
+    }
+
+    #[test]
     fn from_prices_applies_2x_with_saturation() {
         let b = ResourceBounds::from_prices(10, 20, 30);
         assert_eq!(b.l1_gas.max_price_per_unit, 20);
@@ -183,6 +355,8 @@ mod tests {
         // Saturates instead of overflowing.
         let s = ResourceBounds::from_prices(u128::MAX, 0, 0);
         assert_eq!(s.l1_gas.max_price_per_unit, u128::MAX);
+        // Real (fee-paying) transaction bounds are independent of the virtual override.
+        assert_eq!(b.l2_gas.max_amount, 0x7000000);
     }
 
     #[test]

@@ -152,6 +152,17 @@ Optional:
 - `PROVER_URL` — remote prover JSON-RPC endpoint used by E2E and playground
   flows. The standalone `snip36 prove virtual-os` command takes the equivalent
   `--prover-url` option.
+- `SNIP36_VIRTUAL_L2_GAS` — `l2_gas.max_amount` of the virtual (zero-fee)
+  transaction built by the E2E flows and the CoinFlip playground route, decimal
+  or `0x` hex (default `0x7000000` ≈ 117M). The E2E commands take the equivalent
+  `--virtual-l2-gas` option. Raise it for virtual transactions that need more
+  Sierra gas in `__execute__`; values above `1110000000` are rejected. The
+  virtual OS caps execution at `execute_max_sierra_gas` (1.11e9) and validation
+  at `validate_max_sierra_gas` (100M), from the Starknet 0.14.3/0.14.4 versioned
+  constants. The bounds are part of the signed virtual-transaction hash, and the
+  real proof-bearing transaction's bounds are not affected. With
+  `snip36 prove virtual-os --tx-json`, set `resource_bounds.l2_gas.max_amount`
+  in the JSON yourself — it is passed through unchanged.
 
 ### 4. Check the stack, then run the health check
 
@@ -223,6 +234,10 @@ snip36 extract             # Extract virtual OS program
 ```
 
 Global options: `--env-file <path>`, `--verbose`, `--quiet`
+
+E2E options (`e2e`, `e2e-messages`, `e2e-coinflip`, `e2e-settlement`):
+`--virtual-l2-gas <amount>` sets the virtual transaction's `l2_gas.max_amount`
+(see `SNIP36_VIRTUAL_L2_GAS` above).
 
 Example application contracts are deployed via the playground backend routes or
 with `sncast` directly; the generic CLI only exposes `snip36 deploy account`.

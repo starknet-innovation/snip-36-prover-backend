@@ -67,6 +67,7 @@ snip36 doctor               # Offline proving-stack check (no RPC/keys)
 snip36 setup --prebuilt
 snip36 extract
 snip36 e2e
+snip36 e2e --virtual-l2-gas 1110000000   # raise the virtual tx's L2 gas budget (all e2e* commands)
 snip36 e2e-messages          # E2E test for L2→L1 messages (messenger contract)
 snip36 e2e-coinflip          # Provable coin flip example (off-chain game)
 snip36 e2e-settlement        # E2E settlement: deposit → prove → settle → payout
@@ -166,4 +167,5 @@ Full procedure (bump → tag → what each tag publishes, and keeping the pins /
 - Runner must use `--prefetch-state false` (prefetch has a bug with missing storage keys)
 - Tx signing must include `proof_facts` in the hash chain — standard Starknet SDKs do NOT do this
 - L2 gas for proof verification is ~75M — set max to ≥117M
+- The virtual (zero-fee) tx defaults to the same 117M (`0x7000000`) L2 gas; heavier virtual txs need `--virtual-l2-gas` / `SNIP36_VIRTUAL_L2_GAS` (max 1,110,000,000). The virtual OS caps `__execute__` at `execute_max_sierra_gas` (1.11e9) and `__validate__` at `validate_max_sierra_gas` (100M) — Starknet 0.14.3/0.14.4 versioned constants. This never changes the real tx bounds (`ResourceBounds::from_prices`)
 - The `extractor` crate requires `deps/sequencer/` to exist (run `snip36 setup` first)

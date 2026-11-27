@@ -447,7 +447,13 @@ pub async fn play_coinflip(
         };
         let nonce_felt = Felt::from(nonce);
 
-        let zero_bounds = ResourceBounds::zero_fee();
+        let zero_bounds = match ResourceBounds::zero_fee_from_env(None) {
+            Ok(b) => b,
+            Err(e) => {
+                send("error", &format!("Invalid SNIP36_VIRTUAL_L2_GAS: {e}")).await;
+                return;
+            }
+        };
         let standard_tx_hash = compute_invoke_v3_tx_hash(
             sender_felt,
             &calldata_felts,
